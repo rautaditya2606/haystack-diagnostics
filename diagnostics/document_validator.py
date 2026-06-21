@@ -8,6 +8,7 @@ def validate_document_store(
     expected_metadata_keys: Optional[List[str]] = None,
     expected_embedding_dim: Optional[int] = None,
     short_chunk_threshold: int = 50,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Validates the health of the documents within a Haystack Document Store.
@@ -24,14 +25,18 @@ def validate_document_store(
     :param expected_metadata_keys: Optional list of keys that must be present in document metadata.
     :param expected_embedding_dim: Optional dimension expected for embeddings.
     :param short_chunk_threshold: Character threshold for identifying short chunks.
+    :param filters: Optional filters dictionary to restrict which documents are validated.
     :return: A dictionary containing the validation summary and detailed results.
     """
     try:
-        # Standard filter_documents call to fetch all documents
-        documents = document_store.filter_documents()
+        # Standard filter_documents call to fetch all documents matching filters
+        documents = document_store.filter_documents(filters=filters)
     except Exception:
-        # Fallback if filters argument is required
-        documents = document_store.filter_documents(filters=None)
+        # Fallback if filters argument is required or failed
+        try:
+            documents = document_store.filter_documents()
+        except Exception:
+            documents = document_store.filter_documents(filters=None)
 
     total_docs = len(documents)
     

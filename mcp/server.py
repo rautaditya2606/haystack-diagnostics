@@ -20,6 +20,8 @@ def validate_store(
     store_data_path: Optional[str] = None,
     qdrant_url: Optional[str] = None,
     qdrant_index: Optional[str] = None,
+    weaviate_url: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
     expected_metadata_keys: Optional[List[str]] = None,
     expected_embedding_dim: Optional[int] = None,
     short_chunk_threshold: int = 50,
@@ -27,10 +29,12 @@ def validate_store(
     """
     Validates the health of a document store.
     
-    :param store_type: Either 'in_memory' or 'qdrant'.
+    :param store_type: Either 'in_memory', 'qdrant', or 'weaviate'.
     :param store_data_path: Path to a JSON file containing serialized documents (required for in_memory).
     :param qdrant_url: URL to the Qdrant instance (required for qdrant).
     :param qdrant_index: Qdrant collection name/index (required for qdrant).
+    :param weaviate_url: URL to the Weaviate instance (required for weaviate).
+    :param filters: Optional metadata filters dictionary for tenant isolation/scoping.
     :param expected_metadata_keys: List of metadata keys expected in documents.
     :param expected_embedding_dim: Expected embedding dimension size.
     :param short_chunk_threshold: Minimum character length for document text.
@@ -74,6 +78,18 @@ def validate_store(
             return "Error: 'qdrant-haystack' package is not installed in the environment."
         except Exception as e:
             return f"Error connecting to QdrantDocumentStore: {str(e)}"
+            
+    elif store_type == "weaviate":
+        if not weaviate_url:
+            return "Error: weaviate_url is required for weaviate store validation."
+        
+        try:
+            from haystack_integrations.document_stores.weaviate import WeaviateDocumentStore
+            document_store = WeaviateDocumentStore(url=weaviate_url)
+        except ImportError:
+            return "Error: 'weaviate-haystack' package is not installed in the environment."
+        except Exception as e:
+            return f"Error connecting to WeaviateDocumentStore: {str(e)}"
     else:
         return f"Error: Unsupported store type '{store_type}'."
 
@@ -83,7 +99,8 @@ def validate_store(
             document_store=document_store,
             expected_metadata_keys=expected_metadata_keys,
             expected_embedding_dim=expected_embedding_dim,
-            short_chunk_threshold=short_chunk_threshold
+            short_chunk_threshold=short_chunk_threshold,
+            filters=filters
         )
         return json.dumps(report, indent=2)
     except Exception as e:
@@ -103,7 +120,8 @@ def inspect_pipeline_graph(pipeline_config_path: str) -> str:
 
     try:
         if path.suffix in (".yaml", ".yml"):
-            pipeline = Pipeline.load(path)
+            with open(path, "r", encoding="utf-8") as f:
+                pipeline = Pipeline.load(f)
         else:
             with open(path, "r", encoding="utf-8") as f:
                 pipeline = Pipeline.loads(f.read())
@@ -151,7 +169,8 @@ def diagnose_retrieval(
     # Load Pipeline
     try:
         if path.suffix in (".yaml", ".yml"):
-            pipeline = Pipeline.load(path)
+            with open(path, "r", encoding="utf-8") as f:
+                pipeline = Pipeline.load(f)
         else:
             with open(path, "r", encoding="utf-8") as f:
                 pipeline = Pipeline.loads(f.read())

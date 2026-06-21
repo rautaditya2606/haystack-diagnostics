@@ -1,5 +1,24 @@
 import re
+import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+
+def _clean_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively converts non-serializable fields (like UUIDs/datetimes) to strings."""
+    cleaned = {}
+    for k, v in meta.items():
+        if isinstance(v, uuid.UUID):
+            cleaned[k] = str(v)
+        elif isinstance(v, datetime):
+            cleaned[k] = v.isoformat()
+        elif isinstance(v, dict):
+            cleaned[k] = _clean_metadata(v)
+        elif isinstance(v, list):
+            cleaned[k] = [str(x) if isinstance(x, uuid.UUID) else x for x in v]
+        else:
+            cleaned[k] = v
+    return cleaned
 
 
 def _discover_component_names(pipeline):
@@ -163,6 +182,13 @@ def diagnose_retrieval_failure(
                 r"unable to answer",
                 r"cannot find any information",
                 r"no information in the context",
+                r"don't have.*enough",
+                r"do not have.*enough",
+                r"sorry, i don't",
+                r"i'm sorry, but",
+                r"i'm sorry, i don't",
+                r"not enough.*information",
+                r"insufficient information",
             ]
             answer_lower = generated_answer.lower()
             if any(re.search(pattern, answer_lower) for pattern in refusal_keywords):
@@ -208,7 +234,7 @@ def diagnose_retrieval_failure(
             "id": doc.id,
             "score": doc.score,
             "content_preview": doc.content[:150] + "..." if doc.content else None,
-            "meta": doc.meta or {},
+            "meta": _clean_metadata(doc.meta or {}),
             "rank": idx + 1,
         })
 

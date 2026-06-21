@@ -129,3 +129,24 @@ def test_validate_document_store_one_document():
     assert report["summary"]["valid_documents"] == 1
     assert report["summary"]["invalid_documents"] == 0
     assert report["summary"]["total_issues_found"] == 0
+
+
+def test_validate_document_store_with_filters():
+    store = InMemoryDocumentStore()
+    store.write_documents([
+        Document(content="Short", meta={"user_id": "user_a"}),
+        Document(
+            content="This is a valid long text document that exceeds the threshold.",
+            meta={"user_id": "user_b"},
+            embedding=[0.1, 0.2, 0.3]
+        )
+    ])
+    # Validate only user_b's documents
+    report = validate_document_store(
+        store,
+        short_chunk_threshold=20,
+        filters={"field": "meta.user_id", "operator": "==", "value": "user_b"}
+    )
+    assert report["summary"]["total_documents"] == 1
+    assert report["summary"]["invalid_documents"] == 0
+
