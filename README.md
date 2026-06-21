@@ -148,7 +148,144 @@ To run the local diagnostics demo, execute:
 ```bash
 python demo/sample_pipeline.py
 ```
+
 This script populates an in-memory document store with a mix of healthy and corrupted documents, builds a RAG pipeline, and demonstrates the output of the validator, inspector, and all four failure diagnoses cases (Success, No Results, Generator Refusal, and Ranking Failure) with zero external API dependencies.
+
+<details>
+<summary><b>Click to view example demo execution output</b></summary>
+
+```
+============================================================
+             HAYSTACK DIAGNOSTICS DEMO RUN
+============================================================
+
+[Step 1] Initializing Document Store and Indexing Documents...
+Indexed 7 documents.
+
+[Step 2] Running validate_document_store()...
+{
+  "summary": {
+    "total_documents": 7,
+    "valid_documents": 0,
+    "invalid_documents": 7,
+    "total_issues_found": 12
+  },
+  "checks": {
+    "content_none": {
+      "status": "fail",
+      "count": 1,
+      "document_ids": [
+        "0f5940589232f80dd5547fea9d88a13ff9f217b4fe124de4c24e13f57dd4ad4a"
+      ]
+    },
+    "empty_content": {
+      "status": "fail",
+      "count": 1,
+      "document_ids": [
+        "5241c4b42c205fc2dc784e0d4700d76f70645eebb445c9368948c154d019ad92"
+      ]
+    },
+    "short_chunks": {
+      "status": "warning",
+      "count": 1,
+      "document_ids": [
+        "b11b37cde4c884c418583ef1b3003e367ba24e80b12983f1188c88faab990918"
+      ],
+      "threshold": 20
+    },
+    "duplicate_chunks": {
+      "status": "fail",
+      "count": 1,
+      "duplicates": [
+        {
+          "content_hash": "d509e5a2c3cca5a6ca1492380a149f80",
+          "document_ids": [
+            "1d48eac32b58322c065b46888b5b078e95c783b7d52a01ffa7c8aaa17234af70",
+            "0c831f313e41d38cb742717723e5806227e9d1b96be54fe4f966a89fb91eb469"
+          ]
+        }
+      ]
+    },
+    "missing_metadata": {
+      "status": "pass",
+      "count": 0,
+      "details": []
+    },
+    "null_embeddings": {
+      "status": "fail",
+      "count": 7,
+      "document_ids": [
+        "335f72ebc7e221eb58b13f1e8b6a86e056cc79fc064c4539b461fe624f7b96d0",
+        "1d48eac32b58322c065b46888b5b078e95c783b7d52a01ffa7c8aaa17234af70",
+        "73572c7e0908450c20ebf64119f41d570a1dc7d0c53b91b9953698744051e048",
+        "0f5940589232f80dd5547fea9d88a13ff9f217b4fe124de4c24e13f57dd4ad4a",
+        "5241c4b42c205fc2dc784e0d4700d76f70645eebb445c9368948c154d019ad92",
+        "b11b37cde4c884c418583ef1b3003e367ba24e80b12983f1188c88faab990918",
+        "0c831f313e41d38cb742717723e5806227e9d1b96be54fe4f966a89fb91eb469"
+      ]
+    },
+    "embedding_dimension_mismatch": {
+      "status": "pass",
+      "count": 0,
+      "expected_dimension": null,
+      "actual_dimensions": {},
+      "details": []
+    }
+  }
+}
+
+[Step 3] Constructing RAG Pipeline...
+Pipeline constructed and connected successfully.
+
+[Step 4] Running inspect_pipeline()...
+Pipeline Metadata: {}
+Pipeline Components found: ['retriever', 'prompt_builder', 'generator']
+Pipeline Connections count: 2
+
+Generated Mermaid Diagram:
+------------------------------------------------------------
+
+%%{ init: {} }%%
+
+graph TD;
+
+retriever["<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>"]:::component -- "documents -> documents<br><small><i>list[Document]</i></small>" --> prompt_builder["<b>prompt_builder</b><br><small><i>PromptBuilder<br><br>Optional inputs:<ul style='text-align:left;'><li>template (str | None)</li><li>template_variables (dict[str, Any] | None)</li></ul></i></small>"]:::component
+prompt_builder["<b>prompt_builder</b><br><small><i>PromptBuilder<br><br>Optional inputs:<ul style='text-align:left;'><li>template (str | None)</li><li>template_variables (dict[str, Any] | None)</li></ul></i></small>"]:::component -- "prompt -> prompt<br><small><i>str</i></small>" --> generator["<b>generator</b><br><small><i>SimpleDemoGenerator</i></small>"]:::component
+i{&ast;}--"query<br><small><i>str</i></small>"--> retriever["<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>"]:::component
+i{&ast;}--"query<br><small><i>Any</i></small>"--> prompt_builder["<b>prompt_builder</b><br><small><i>PromptBuilder<br><br>Optional inputs:<ul style='text-align:left;'><li>template (str | None)</li><li>template_variables (dict[str, Any] | None)</li></ul></i></small>"]:::component
+generator["<b>generator</b><br><small><i>SimpleDemoGenerator</i></small>"]:::component--"replies<br><small><i>list</i></small>"--> o{&ast;}
+
+classDef component text-align:center;
+
+
+------------------------------------------------------------
+
+[Step 5] Running failure diagnostics for different query cases...
+
+--- CASE A: SUCCESS QUERY (Query: 'Paris') ---
+Detected Failure Type: SUCCESS
+Answer: The capital of France is Paris.
+Triggered Checks: {'no_results': False, 'empty_context': False, 'generator_failure': False, 'ranking_failure': False}
+
+--- CASE B: NO RESULTS FAILURE (Query: 'Tokyo') ---
+Detected Failure Type: NO_RESULTS
+Triggered Checks: {'no_results': True, 'empty_context': False, 'generator_failure': False, 'ranking_failure': False}
+
+--- CASE C: GENERATOR FAILURE - REFUSAL (Query: 'Rome') ---
+Detected Failure Type: GENERATOR_FAILURE
+Answer: I'm sorry, I do not know the answer based on the provided context.
+Triggered Checks: {'no_results': False, 'empty_context': False, 'generator_failure': True, 'ranking_failure': False}
+
+--- CASE D: RANKING FAILURE (Query: 'Berlin', Threshold: 5.0) ---
+Detected Failure Type: RANKING_FAILURE
+Top Document Score: 1.1650555327475023
+Triggered Checks: {'no_results': False, 'empty_context': False, 'generator_failure': False, 'ranking_failure': True}
+
+============================================================
+Demo completed successfully!
+============================================================
+```
+</details>
 
 ---
 
