@@ -76,7 +76,7 @@ haystack-diagnostics/
 
 1. **Clone the repository** and navigate to it:
    ```bash
-   cd Haystack_Inspector
+   cd haystack-diagnostics
    ```
 
 2. **Install the package and dependencies**:
@@ -406,15 +406,108 @@ mcp dev mcp/server.py
 ```
 
 ### Claude Desktop Integration
+
 Add the following configuration to your `claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
     "haystack-diagnostics": {
       "command": "python",
-      "args": ["-m", "mcp.server", "/path/to/Haystack_Inspector/mcp/server.py"]
+      "args": [
+        "/path/to/haystack-diagnostics/mcp/server.py"
+      ]
     }
   }
 }
 ```
+
 Once connected, Claude can automatically validate document store health, query pipeline graphs, and debug retrieval issues on your local workspace.
+
+### MCP Tool Invocation Example
+
+Here is what an LLM client sends and receives when invoking the `validate_store` tool:
+
+#### 1. Tool Call (LLM -> MCP Server)
+The client instructs the MCP server to validate a serialized document store representation:
+```json
+{
+  "name": "validate_store",
+  "arguments": {
+    "store_type": "in_memory",
+    "store_data_path": "demo/sample_store.json",
+    "expected_metadata_keys": ["source", "language"],
+    "expected_embedding_dim": 1536
+  }
+}
+```
+
+#### 2. Tool Response (MCP Server -> LLM)
+The server returns a structured diagnostic report detailing ingestion issues, duplicates, and missing metadata:
+```json
+{
+  "summary": {
+    "total_documents": 7,
+    "valid_documents": 0,
+    "invalid_documents": 7,
+    "total_issues_found": 12
+  },
+  "checks": {
+    "content_none": {
+      "status": "fail",
+      "count": 1,
+      "document_ids": [
+        "0f5940589232f80dd5547fea9d88a13ff9f217b4fe124de4c24e13f57dd4ad4a"
+      ]
+    },
+    "empty_content": {
+      "status": "fail",
+      "count": 1,
+      "document_ids": [
+        "5241c4b42c205fc2dc784e0d4700d76f70645eebb445c9368948c154d019ad92"
+      ]
+    },
+    "short_chunks": {
+      "status": "warning",
+      "count": 1,
+      "document_ids": [
+        "b11b37cde4c884c418583ef1b3003e367ba24e80b12983f1188c88faab990918"
+      ],
+      "threshold": 20
+    },
+    "duplicate_chunks": {
+      "status": "fail",
+      "count": 1,
+      "duplicates": [
+        {
+          "content_hash": "d509e5a2c3cca5a6ca1492380a149f80",
+          "document_ids": [
+            "1d48eac32b58322c065b46888b5b078e95c783b7d52a01ffa7c8aaa17234af70",
+            "0c831f313e41d38cb742717723e5806227e9d1b96be54fe4f966a89fb91eb469"
+          ]
+        }
+      ]
+    },
+    "missing_metadata": {
+      "status": "pass",
+      "count": 0,
+      "details": []
+    },
+    "null_embeddings": {
+      "status": "fail",
+      "count": 7,
+      "document_ids": [
+        "335f72ebc7e221eb58b13f1e8b6a86e056cc79fc064c4539b461fe624f7b96d0",
+        "1d48eac32b58322c065b46888b5b078e95c783b7d52a01ffa7c8aaa17234af70"
+      ]
+    },
+    "embedding_dimension_mismatch": {
+      "status": "pass",
+      "count": 0,
+      "expected_dimension": null,
+      "actual_dimensions": {},
+      "details": []
+    }
+  }
+}
+```
