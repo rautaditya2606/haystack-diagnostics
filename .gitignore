@@ -1,0 +1,9 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Packaging artifacts
+*.egg-info/
+
+# Test cache
+.pytest_cache/

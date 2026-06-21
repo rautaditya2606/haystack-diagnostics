@@ -1,0 +1,4 @@
+haystack-ai==2.29.0
+mcp==1.28.0
+networkx==3.4.2
+pytest==9.1.1
