@@ -264,3 +264,32 @@ def test_diagnoser_custom_retriever_name():
     )
     assert report["failure_type"] == "NO_RESULTS"
 
+
+def test_diagnoser_with_pipeline_outputs():
+    from unittest.mock import MagicMock
+    mock_pipeline = MagicMock()
+    mock_pipeline.graph.nodes = MagicMock(return_value=[
+        ("retriever", {"instance": MagicMock()}),
+        ("generator", {"instance": MagicMock()})
+    ])
+    
+    # We will pass pre-computed outputs, so mock_pipeline.run should NOT be called.
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("pipeline.run should not be called when pipeline_outputs is provided")
+    mock_pipeline.run = should_not_run
+    
+    pre_computed_outputs = {
+        "retriever": {"documents": []},
+        "generator": {"replies": ["I do not know the answer"]}
+    }
+    
+    report = diagnose_retrieval_failure(
+        pipeline=mock_pipeline,
+        query="test query",
+        retriever_component_name="retriever",
+        pipeline_outputs=pre_computed_outputs,
+        ranking_threshold=0.5
+    )
+    
+    assert report["failure_type"] == "NO_RESULTS"
+

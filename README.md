@@ -44,200 +44,9 @@ Classifies query-level retrieval and pipeline failures by running the pipeline a
 
 ---
 
-## Repository Structure
+## Running the Demo & Real-World Showcase
 
-```
-haystack-diagnostics/
-│
-├── diagnostics/
-│   ├── __init__.py
-│   ├── document_validator.py
-│   ├── pipeline_inspector.py
-│   └── failure_diagnoser.py
-│
-├── mcp/
-│   └── server.py                  # MCP server wrapper (<200 lines)
-│
-├── demo/
-│   └── sample_pipeline.py         # Out-of-the-box local demo run
-│
-├── tests/                         # Unit tests
-│   ├── test_document_validator.py
-│   ├── test_pipeline_inspector.py
-│   └── test_failure_diagnoser.py
-│
-├── pyproject.toml                 # Package metadata and build system setup
-├── requirements.txt               # Pinned dependencies for environment replication
-└── README.md
-```
-
----
-
-## Installation & Setup
-
-1. **Clone the repository** and navigate to it:
-   ```bash
-   cd haystack-diagnostics
-   ```
-
-2. **Install the package and dependencies**:
-   You can install the package in editable mode along with all core dependencies:
-   ```bash
-   pip install -e .
-   ```
-   
-   To install with development dependencies (e.g. `pytest`):
-   ```bash
-   pip install -e ".[dev]"
-   ```
-   
-   Or replicate the exact conda/pip environment using pinned versions:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## Usage Examples
-
-### Programmatic Diagnostics
-
-```python
-from haystack.document_stores.in_memory import InMemoryDocumentStore
-from haystack import Document, Pipeline
-from haystack.components.retrievers.in_memory import InMemoryBM25Retriever
-from haystack.components.builders import PromptBuilder
-
-# Import the diagnostic tools
-from diagnostics import validate_document_store, inspect_pipeline, diagnose_retrieval_failure
-
-# 1. Validate Document Store Ingestion Health
-document_store = InMemoryDocumentStore()
-# (Write documents to your store...)
-
-report = validate_document_store(
-    document_store=document_store,
-    expected_metadata_keys=["source", "language"],
-    expected_embedding_dim=1536,
-    short_chunk_threshold=50,
-    filters={"user_id": "tenant-123"}  # Optional scoping for tenant isolation
-)
-print("Store Health Report:", report["summary"])
-
-# 2. Inspect Pipeline Structure
-pipe = Pipeline()
-# (Add components and connect them...)
-
-structure = inspect_pipeline(pipe)
-print("Mermaid graph:\n", structure["mermaid"])
-
-# 3. Diagnose Retrieval Failures
-diagnostics = diagnose_retrieval_failure(
-    pipeline=pipe,
-    query="What is the capital of France?",
-    expected_answer="Paris",
-    ranking_threshold=0.6
-)
-print("Primary Failure Type:", diagnostics["failure_type"])
-print("Diagnostics Summary:", diagnostics["diagnostics"])
-```
-
----
-
-## Integration Patterns
-
-### 1. Wrapping API Query Endpoints (FastAPI)
-Deploy `diagnose_retrieval_failure` directly in your backend API to automatically classify and log RAG failures in production:
-
-```python
-import logging
-from fastapi import FastAPI
-from pydantic import BaseModel
-from diagnostics import diagnose_retrieval_failure
-from my_project.pipeline import get_rag_pipeline
-
-app = FastAPI()
-logger = logging.getLogger("rag_diagnostics")
-
-class QueryRequest(BaseModel):
-    query: str
-    expected_answer: str | None = None
-
-@app.post("/query")
-async def run_query(request: QueryRequest):
-    pipeline = get_rag_pipeline()
-    
-    # Run the query as usual
-    inputs = {
-        "retriever": {"query": request.query},
-        "prompt_builder": {"query": request.query}
-    }
-    result = pipeline.run(inputs)
-    answer = result.get("generator", {}).get("replies", [None])[0]
-    
-    # If the answer is missing, too short, or indicates refusal, trigger diagnostics
-    if not answer or any(w in answer.lower() for w in ["sorry", "don't know", "not mentioned"]):
-        report = diagnose_retrieval_failure(
-            pipeline=pipeline,
-            query=request.query,
-            pipeline_inputs=inputs,
-            expected_answer=request.expected_answer,
-            ranking_threshold=0.65
-        )
-        # Log the classified failure type (NO_RESULTS, RANKING_FAILURE, etc.)
-        logger.error(f"RAG Failure: {report['failure_type']} | Details: {report['diagnostics']}")
-        
-    return {"answer": answer}
-```
-
-### 2. Post-Ingestion Health Check (Scheduled Cron)
-Verify the state of your document store after bulk uploads or on a cron schedule to alert on malformed documents:
-
-```python
-import sys
-from diagnostics import validate_document_store
-from my_project.db import get_document_store
-
-def run_health_check():
-    store = get_document_store()
-    report = validate_document_store(
-        document_store=store,
-        expected_metadata_keys=["source", "author"],
-        expected_embedding_dim=1536
-    )
-    
-    if report["summary"]["invalid_documents"] > 0:
-        print(f"ALERT: Detected {report['summary']['total_issues_found']} ingestion errors!")
-        sys.exit(1)
-        
-if __name__ == "__main__":
-    run_health_check()
-```
-
-### 3. CI/CD Topology Verification
-Verify that architectural constraints are not violated by developers modifying pipeline components:
-
-```python
-# test_architecture.py
-from diagnostics import inspect_pipeline
-from my_project.pipeline import build_pipeline
-
-def test_pipeline_layout_constraints():
-    pipe = build_pipeline()
-    report = inspect_pipeline(pipe)
-    
-    # Assert structural layout: reranker must send documents to prompt_builder
-    connections = report["connections"]
-    assert any(
-        c["sender"] == "reranker" and c["receiver"] == "prompt_builder"
-        for c in connections
-    ), "Architecture Error: The Reranker output is not connected to the PromptBuilder."
-```
-
----
-
-## Running the Demo
-
+### 1. Local Demo Run
 To run the local diagnostics demo, execute:
 ```bash
 python demo/sample_pipeline.py
@@ -381,6 +190,219 @@ Demo completed successfully!
 ```
 </details>
 
+### 2. Real-World Validation Findings
+Tested against a live RAG Studio (Vectornest AI) instance backed by Weaviate 1.25.10 with 823 ingested chunks (OpenAI 1536-dim embeddings).
+
+- **`validate_document_store` findings**:
+  - 195 duplicate chunks (23.7% of corpus)
+  - 8 short chunks below minimum content threshold
+  - 14 documents with missing metadata keys
+  - Tenant-scoped validation via `filters` parameter correctly isolated 796 documents for a single `user_id`
+- **`inspect_pipeline` findings**:
+  - Reconstructed and mapped a 4-component RAG pipeline (`OpenAITextEmbedder` → `WeaviateEmbeddingRetriever` → `PromptBuilder` → `OpenAIGenerator`) with full Mermaid.js graph output.
+- **`diagnose_retrieval_failure` findings**:
+  - Correctly classified a gibberish query (`xyzabcde123`) as `GENERATOR_FAILURE` based on LLM refusal patterns.
+- **MCP Benchmark**:
+  - 15 concurrent `inspect_pipeline_graph` calls over stdio via `asyncio.gather` completed in ~0.95s with zero lock contention.
+
+---
+
+## Installation & Setup
+
+1. **Clone the repository** and navigate to it:
+   ```bash
+   cd haystack-diagnostics
+   ```
+
+2. **Install the package and dependencies**:
+   You can install the package in editable mode along with all core dependencies:
+   ```bash
+   pip install -e .
+   ```
+   
+   To install with development dependencies (e.g. `pytest`):
+   ```bash
+   pip install -e ".[dev]"
+   ```
+   
+   Or replicate the exact conda/pip environment using pinned versions:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+---
+
+## Usage Examples
+
+### Programmatic Diagnostics
+
+```python
+from haystack.document_stores.in_memory import InMemoryDocumentStore
+from haystack import Document, Pipeline
+from haystack.components.retrievers.in_memory import InMemoryBM25Retriever
+from haystack.components.builders import PromptBuilder
+
+# Import the diagnostic tools
+from diagnostics import validate_document_store, inspect_pipeline, diagnose_retrieval_failure
+
+# 1. Validate Document Store Ingestion Health
+document_store = InMemoryDocumentStore()
+# (Write documents to your store...)
+
+report = validate_document_store(
+    document_store=document_store,
+    expected_metadata_keys=["source", "language"],
+    expected_embedding_dim=1536,
+    short_chunk_threshold=50,
+    filters={"user_id": "tenant-123"}  # Optional scoping for tenant isolation
+)
+print("Store Health Report:", report["summary"])
+
+# 2. Inspect Pipeline Structure
+pipe = Pipeline()
+# (Add components and connect them...)
+
+structure = inspect_pipeline(pipe)
+print("Mermaid graph:\n", structure["mermaid"])
+
+# 3. Diagnose Retrieval Failures
+diagnostics = diagnose_retrieval_failure(
+    pipeline=pipe,
+    query="What is the capital of France?",
+    expected_answer="Paris",
+    ranking_threshold=0.6
+)
+print("Primary Failure Type:", diagnostics["failure_type"])
+print("Diagnostics Summary:", diagnostics["diagnostics"])
+```
+
+---
+
+## Integration Patterns
+
+### 1. Wrapping API Query Endpoints (FastAPI)
+Deploy `diagnose_retrieval_failure` directly in your backend API to automatically classify and log RAG failures in production:
+
+```python
+import logging
+from fastapi import FastAPI
+from pydantic import BaseModel
+from diagnostics import diagnose_retrieval_failure
+from my_project.pipeline import get_rag_pipeline
+
+app = FastAPI()
+logger = logging.getLogger("rag_diagnostics")
+
+class QueryRequest(BaseModel):
+    query: str
+    expected_answer: str | None = None
+
+@app.post("/query")
+async def run_query(request: QueryRequest):
+    pipeline = get_rag_pipeline()
+    
+    # Run the query once, capturing intermediate retriever outputs
+    inputs = {
+        "retriever": {"query": request.query},
+        "prompt_builder": {"query": request.query}
+    }
+    result = pipeline.run(inputs, include_outputs_from={"retriever"})
+    answer = result.get("generator", {}).get("replies", [None])[0]
+    
+    # If the answer is missing, too short, or indicates refusal, trigger diagnostics (zero-overhead)
+    if not answer or any(w in answer.lower() for w in ["sorry", "don't know", "not mentioned"]):
+        report = diagnose_retrieval_failure(
+            pipeline=pipeline,
+            query=request.query,
+            pipeline_inputs=inputs,
+            pipeline_outputs=result,  # <-- Pass pre-computed outputs (skips second pipeline.run!)
+            expected_answer=request.expected_answer,
+            ranking_threshold=0.65
+        )
+        # Log the classified failure type (NO_RESULTS, RANKING_FAILURE, etc.)
+        logger.error(f"RAG Failure: {report['failure_type']} | Details: {report['diagnostics']}")
+        
+    return {"answer": answer}
+```
+
+### 2. Post-Ingestion Health Check (Scheduled Cron)
+Verify the state of your document store after bulk uploads or on a cron schedule to alert on malformed documents:
+
+> [!WARNING]
+> **Memory and Scale Constraints**: While `validate_document_store` processes documents in batch-wise pages to avoid loading the entire database state into memory at once, the **duplicate detection** check still requires keeping a content hash index in memory. This index scales linearly with the number of unique documents ($O(N)$ memory complexity). If running against millions of documents, you can disable embedding checks by setting `validate_embeddings=False` to optimize memory and speed.
+
+```python
+import sys
+from diagnostics import validate_document_store
+from my_project.db import get_document_store
+
+def run_health_check():
+    store = get_document_store()
+    report = validate_document_store(
+        document_store=store,
+        expected_metadata_keys=["source", "author"],
+        expected_embedding_dim=1536,
+        batch_size=1000,
+        validate_embeddings=True  # Disable to skip fetching high-dim vectors
+    )
+    
+    if report["summary"]["invalid_documents"] > 0:
+        print(f"ALERT: Detected {report['summary']['total_issues_found']} ingestion errors!")
+        sys.exit(1)
+        
+if __name__ == "__main__":
+    run_health_check()
+```
+
+### 3. CI/CD Topology Verification
+Verify that architectural constraints are not violated by developers modifying pipeline components:
+
+```python
+# test_architecture.py
+from diagnostics import inspect_pipeline
+from my_project.pipeline import build_pipeline
+
+def test_pipeline_layout_constraints():
+    pipe = build_pipeline()
+    report = inspect_pipeline(pipe)
+    
+    # Assert structural layout: reranker must send documents to prompt_builder
+    connections = report["connections"]
+    assert any(
+        c["sender"] == "reranker" and c["receiver"] == "prompt_builder"
+        for c in connections
+    ), "Architecture Error: The Reranker output is not connected to the PromptBuilder."
+```
+
+---
+
+## Repository Structure
+
+```
+haystack-diagnostics/
+│
+├── diagnostics/
+│   ├── __init__.py
+│   ├── document_validator.py
+│   ├── pipeline_inspector.py
+│   └── failure_diagnoser.py
+│
+├── mcp/
+│   └── server.py                  # MCP server wrapper (<200 lines)
+│
+├── demo/
+│   └── sample_pipeline.py         # Out-of-the-box local demo run
+│
+├── tests/                         # Unit tests
+│   ├── test_document_validator.py
+│   ├── test_pipeline_inspector.py
+│   └── test_failure_diagnoser.py
+│
+├── pyproject.toml                 # Package metadata and build system setup
+├── requirements.txt               # Pinned dependencies for environment replication
+└── README.md
+```
+
 ---
 
 ## Running the Tests
@@ -395,24 +417,6 @@ To run the test suite:
 ```bash
 pytest tests/
 ```
-
----
-
-## Real-world Validation
-
-Tested against a live RAG Studio (Vectornest AI) instance backed by Weaviate 1.25.10 with 823 ingested chunks (OpenAI 1536-dim embeddings).
-
-`validate_document_store` findings:
-- 195 duplicate chunks (23.7% of corpus)
-- 8 short chunks below minimum content threshold
-- 14 documents with missing metadata keys
-- Tenant-scoped validation via `filters` parameter correctly isolated 796 documents for a single `user_id`
-
-`inspect_pipeline` successfully reconstructed and mapped a 4-component RAG pipeline (`OpenAITextEmbedder` → `WeaviateEmbeddingRetriever` → `PromptBuilder` → `OpenAIGenerator`) with full Mermaid.js graph output.
-
-`diagnose_retrieval_failure` correctly classified a gibberish query (`xyzabcde123`) as `GENERATOR_FAILURE` based on LLM refusal patterns.
-
-**MCP Benchmark:** 15 concurrent `inspect_pipeline_graph` calls over stdio via `asyncio.gather` completed in ~0.95s with zero lock contention.
 
 ---
 
@@ -454,16 +458,25 @@ Once connected, Claude can automatically validate document store health, query p
 
 ### MCP Tool Invocation Example
 
-Here is what an LLM client sends and receives when invoking the `validate_store` tool:
+Here is what an LLM client sends and receives when invoking the `validate_store` tool using either a local path or inline payloads:
 
 #### 1. Tool Call (LLM -> MCP Server)
-The client instructs the MCP server to validate a serialized document store representation:
+The client instructs the MCP server to validate document store health (this example uses decoupled inline document payloads, bypassing filesystem dependencies):
 ```json
 {
   "name": "validate_store",
   "arguments": {
     "store_type": "in_memory",
-    "store_data_path": "demo/sample_store.json",
+    "documents_data": [
+      {
+        "content": "Paris is the capital of France.",
+        "meta": {"source": "wiki"}
+      },
+      {
+        "content": "Berlin is the capital of Germany.",
+        "meta": {"source": "wiki"}
+      }
+    ],
     "expected_metadata_keys": ["source", "language"],
     "expected_embedding_dim": 1536
   }

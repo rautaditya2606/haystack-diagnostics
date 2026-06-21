@@ -172,9 +172,17 @@ def main():
 
     # Case C: Generator Failure (Query: 'Rome' - causes refusal reply)
     print("\n--- CASE C: GENERATOR FAILURE - REFUSAL (Query: 'Rome') ---")
+    
+    # Run the pipeline once, capturing intermediate retriever outputs
+    inputs = {"retriever": {"query": "Rome"}, "prompt_builder": {"query": "Rome"}}
+    outputs = pipeline.run(inputs, include_outputs_from={"retriever"})
+    
+    # Run diagnostics using the pre-computed outputs (zero-overhead execution)
     diag_generator_fail = diagnose_retrieval_failure(
         pipeline=pipeline,
         query="Rome",
+        pipeline_inputs=inputs,
+        pipeline_outputs=outputs,
         ranking_threshold=0.1
     )
     print(f"Detected Failure Type: {diag_generator_fail['failure_type']}")

@@ -56,9 +56,10 @@ def diagnose_retrieval_failure(
     pipeline_inputs: Optional[Dict[str, Any]] = None,
     expected_answer: Optional[str] = None,
     ranking_threshold: float = 0.5,
+    pipeline_outputs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Runs the pipeline, extracts intermediate retriever output, and classifies RAG failure:
+    Runs the pipeline (or uses pre-computed outputs), extracts intermediate retriever output, and classifies RAG failure:
     1. No Results: Retriever returned 0 documents.
     2. Empty Context: Retriever returned documents, but their combined content is empty or missing.
     3. Generator Failure: Generator output is empty, indicates refusal, or doesn't match expected answer.
@@ -70,6 +71,7 @@ def diagnose_retrieval_failure(
     :param pipeline_inputs: Optional dict of inputs for pipeline.run(). Auto-populated if None.
     :param expected_answer: Optional ground truth answer to validate generator output.
     :param ranking_threshold: Threshold below which top document score flags ranking degradation.
+    :param pipeline_outputs: Optional dict of pre-computed outputs from a single pipeline execution.
     :return: A structured diagnostic dictionary report.
     """
     # 1. Component discovery
@@ -84,35 +86,38 @@ def diagnose_retrieval_failure(
             "Please specify retriever_component_name."
         )
 
-    # 2. Auto-populate inputs if not provided
-    if pipeline_inputs is None:
-        pipeline_inputs = {}
+    # 2. Run pipeline or use pre-computed outputs
+    if pipeline_outputs is not None:
+        results = pipeline_outputs
+    else:
+        # Auto-populate inputs if not provided
+        if pipeline_inputs is None:
+            pipeline_inputs = {}
 
-        # Inspect required inputs from pipeline
+            # Inspect required inputs from pipeline
+            try:
+                inputs_schema = pipeline.inputs()
+            except Exception:
+                inputs_schema = {}
+
+            for comp_name, sockets in inputs_schema.items():
+                comp_inputs = pipeline_inputs.setdefault(comp_name, {})
+                for socket_name, socket_info in sockets.items():
+                    # Map the query to input sockets representing text inputs
+                    if socket_name in ("query", "text", "question") and socket_name not in comp_inputs:
+                        comp_inputs[socket_name] = query
+
         try:
-            inputs_schema = pipeline.inputs()
-        except Exception:
-            inputs_schema = {}
-
-        for comp_name, sockets in inputs_schema.items():
-            comp_inputs = pipeline_inputs.setdefault(comp_name, {})
-            for socket_name, socket_info in sockets.items():
-                # Map the query to input sockets representing text inputs
-                if socket_name in ("query", "text", "question") and socket_name not in comp_inputs:
-                    comp_inputs[socket_name] = query
-
-    # 3. Run pipeline capturing retriever intermediate output
-    try:
-        results = pipeline.run(
-            data=pipeline_inputs,
-            include_outputs_from={retriever_component_name}
-        )
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": f"Pipeline execution failed: {str(e)}",
-            "failure_type": "PIPELINE_EXECUTION_ERROR",
-        }
+            results = pipeline.run(
+                data=pipeline_inputs,
+                include_outputs_from={retriever_component_name}
+            )
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Pipeline execution failed: {str(e)}",
+                "failure_type": "PIPELINE_EXECUTION_ERROR",
+            }
 
     # 4. Extract retriever and generator outputs
     retriever_output = results.get(retriever_component_name, {})

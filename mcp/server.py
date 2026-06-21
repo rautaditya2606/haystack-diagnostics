@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 from typing import Any, Dict, List, Optional
 from mcp.server.fastmcp import FastMCP
@@ -18,6 +19,7 @@ mcp = FastMCP("Haystack Diagnostics Engine")
 def validate_store(
     store_type: str = "in_memory",
     store_data_path: Optional[str] = None,
+    documents_data: Optional[List[Dict[str, Any]]] = None,
     qdrant_url: Optional[str] = None,
     qdrant_index: Optional[str] = None,
     weaviate_url: Optional[str] = None,
@@ -25,32 +27,39 @@ def validate_store(
     expected_metadata_keys: Optional[List[str]] = None,
     expected_embedding_dim: Optional[int] = None,
     short_chunk_threshold: int = 50,
+    validate_embeddings: bool = True,
 ) -> str:
     """
     Validates the health of a document store.
     
     :param store_type: Either 'in_memory', 'qdrant', or 'weaviate'.
-    :param store_data_path: Path to a JSON file containing serialized documents (required for in_memory).
-    :param qdrant_url: URL to the Qdrant instance (required for qdrant).
+    :param store_data_path: Path to a JSON file containing serialized documents (optional for in_memory).
+    :param documents_data: Inline list of document dictionaries to validate (alternative to store_data_path for in_memory).
+    :param qdrant_url: URL to the Qdrant instance (required for qdrant, defaults to QDRANT_URL env var).
     :param qdrant_index: Qdrant collection name/index (required for qdrant).
-    :param weaviate_url: URL to the Weaviate instance (required for weaviate).
+    :param weaviate_url: URL to the Weaviate instance (required for weaviate, defaults to WEAVIATE_URL env var).
     :param filters: Optional metadata filters dictionary for tenant isolation/scoping.
     :param expected_metadata_keys: List of metadata keys expected in documents.
     :param expected_embedding_dim: Expected embedding dimension size.
     :param short_chunk_threshold: Minimum character length for document text.
     """
     if store_type == "in_memory":
-        if not store_data_path:
-            return "Error: store_data_path is required for in_memory validation."
-        
-        path = pathlib.Path(store_data_path)
-        if not path.exists():
-            return f"Error: Document data file not found at {store_data_path}."
+        data = None
+        if documents_data is not None:
+            data = documents_data
+        elif store_data_path:
+            path = pathlib.Path(store_data_path)
+            if not path.exists():
+                return f"Error: Document data file not found at {store_data_path}."
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                return f"Error loading store_data_path JSON: {str(e)}"
+        else:
+            return "Error: Either documents_data (inline) or store_data_path must be provided for in_memory validation."
         
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
             # Format data to Haystack Document list
             documents = []
             if isinstance(data, list):
@@ -65,13 +74,14 @@ def validate_store(
             return f"Error loading In-Memory document store: {str(e)}"
             
     elif store_type == "qdrant":
-        if not qdrant_url or not qdrant_index:
-            return "Error: qdrant_url and qdrant_index are required for qdrant store validation."
+        url = qdrant_url or os.environ.get("QDRANT_URL")
+        if not url or not qdrant_index:
+            return "Error: qdrant_url (or QDRANT_URL env var) and qdrant_index are required for qdrant store validation."
         
         try:
             from qdrant_haystack import QdrantDocumentStore
             document_store = QdrantDocumentStore(
-                url=qdrant_url,
+                url=url,
                 index=qdrant_index
             )
         except ImportError:
@@ -80,12 +90,13 @@ def validate_store(
             return f"Error connecting to QdrantDocumentStore: {str(e)}"
             
     elif store_type == "weaviate":
-        if not weaviate_url:
-            return "Error: weaviate_url is required for weaviate store validation."
+        url = weaviate_url or os.environ.get("WEAVIATE_URL")
+        if not url:
+            return "Error: weaviate_url (or WEAVIATE_URL env var) is required for weaviate store validation."
         
         try:
             from haystack_integrations.document_stores.weaviate import WeaviateDocumentStore
-            document_store = WeaviateDocumentStore(url=weaviate_url)
+            document_store = WeaviateDocumentStore(url=url)
         except ImportError:
             return "Error: 'weaviate-haystack' package is not installed in the environment."
         except Exception as e:
@@ -100,7 +111,8 @@ def validate_store(
             expected_metadata_keys=expected_metadata_keys,
             expected_embedding_dim=expected_embedding_dim,
             short_chunk_threshold=short_chunk_threshold,
-            filters=filters
+            filters=filters,
+            validate_embeddings=validate_embeddings
         )
         return json.dumps(report, indent=2)
     except Exception as e:
@@ -108,23 +120,33 @@ def validate_store(
 
 
 @mcp.tool()
-def inspect_pipeline_graph(pipeline_config_path: str) -> str:
+def inspect_pipeline_graph(
+    pipeline_config_path: Optional[str] = None,
+    pipeline_config_content: Optional[str] = None,
+) -> str:
     """
     Inspects and serializes a Haystack Pipeline configuration.
     
     :param pipeline_config_path: Path to the YAML or JSON serialized pipeline file.
+    :param pipeline_config_content: YAML or JSON string representing the serialized pipeline.
     """
-    path = pathlib.Path(pipeline_config_path)
-    if not path.exists():
-        return f"Error: Pipeline config file not found at {pipeline_config_path}."
+    if not pipeline_config_path and not pipeline_config_content:
+        return "Error: Either pipeline_config_path or pipeline_config_content must be provided."
 
+    pipeline = None
     try:
-        if path.suffix in (".yaml", ".yml"):
-            with open(path, "r", encoding="utf-8") as f:
-                pipeline = Pipeline.load(f)
+        if pipeline_config_content:
+            pipeline = Pipeline.loads(pipeline_config_content)
         else:
-            with open(path, "r", encoding="utf-8") as f:
-                pipeline = Pipeline.loads(f.read())
+            path = pathlib.Path(pipeline_config_path)
+            if not path.exists():
+                return f"Error: Pipeline config file not found at {pipeline_config_path}."
+            if path.suffix in (".yaml", ".yml"):
+                with open(path, "r", encoding="utf-8") as f:
+                    pipeline = Pipeline.load(f)
+            else:
+                with open(path, "r", encoding="utf-8") as f:
+                    pipeline = Pipeline.loads(f.read())
     except Exception as e:
         return f"Error loading pipeline: {str(e)}"
 
@@ -137,26 +159,29 @@ def inspect_pipeline_graph(pipeline_config_path: str) -> str:
 
 @mcp.tool()
 def diagnose_retrieval(
-    pipeline_config_path: str,
     query: str,
+    pipeline_config_path: Optional[str] = None,
+    pipeline_config_content: Optional[str] = None,
     retriever_component_name: Optional[str] = None,
     pipeline_inputs: Optional[str] = None,
     expected_answer: Optional[str] = None,
     ranking_threshold: float = 0.5,
+    pipeline_outputs: Optional[str] = None,
 ) -> str:
     """
     Runs retrieval diagnostics on a query for a serialized pipeline.
     
-    :param pipeline_config_path: Path to the serialized pipeline config file.
     :param query: Query string to run diagnostics against.
+    :param pipeline_config_path: Path to the serialized pipeline config file.
+    :param pipeline_config_content: YAML or JSON string representing the serialized pipeline.
     :param retriever_component_name: Optional name of retriever.
     :param pipeline_inputs: Optional JSON string of pipeline inputs.
     :param expected_answer: Optional expected answer string.
     :param ranking_threshold: Threshold below which top document score triggers ranking failure.
+    :param pipeline_outputs: Optional JSON string of pre-computed pipeline outputs.
     """
-    path = pathlib.Path(pipeline_config_path)
-    if not path.exists():
-        return f"Error: Pipeline config file not found at {pipeline_config_path}."
+    if not pipeline_config_path and not pipeline_config_content:
+        return "Error: Either pipeline_config_path or pipeline_config_content must be provided."
 
     # Parse pipeline inputs from JSON string
     inputs_dict = None
@@ -166,14 +191,29 @@ def diagnose_retrieval(
         except Exception as e:
             return f"Error parsing pipeline_inputs JSON: {str(e)}"
 
+    # Parse pipeline outputs from JSON string
+    outputs_dict = None
+    if pipeline_outputs:
+        try:
+            outputs_dict = json.loads(pipeline_outputs)
+        except Exception as e:
+            return f"Error parsing pipeline_outputs JSON: {str(e)}"
+
     # Load Pipeline
+    pipeline = None
     try:
-        if path.suffix in (".yaml", ".yml"):
-            with open(path, "r", encoding="utf-8") as f:
-                pipeline = Pipeline.load(f)
+        if pipeline_config_content:
+            pipeline = Pipeline.loads(pipeline_config_content)
         else:
-            with open(path, "r", encoding="utf-8") as f:
-                pipeline = Pipeline.loads(f.read())
+            path = pathlib.Path(pipeline_config_path)
+            if not path.exists():
+                return f"Error: Pipeline config file not found at {pipeline_config_path}."
+            if path.suffix in (".yaml", ".yml"):
+                with open(path, "r", encoding="utf-8") as f:
+                    pipeline = Pipeline.load(f)
+            else:
+                with open(path, "r", encoding="utf-8") as f:
+                    pipeline = Pipeline.loads(f.read())
     except Exception as e:
         return f"Error loading pipeline: {str(e)}"
 
@@ -185,7 +225,8 @@ def diagnose_retrieval(
             retriever_component_name=retriever_component_name,
             pipeline_inputs=inputs_dict,
             expected_answer=expected_answer,
-            ranking_threshold=ranking_threshold
+            ranking_threshold=ranking_threshold,
+            pipeline_outputs=outputs_dict,
         )
         return json.dumps(report, indent=2)
     except Exception as e:
