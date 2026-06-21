@@ -142,6 +142,98 @@ print("Diagnostics Summary:", diagnostics["diagnostics"])
 
 ---
 
+## Integration Patterns
+
+### 1. Wrapping API Query Endpoints (FastAPI)
+Deploy `diagnose_retrieval_failure` directly in your backend API to automatically classify and log RAG failures in production:
+
+```python
+import logging
+from fastapi import FastAPI
+from pydantic import BaseModel
+from diagnostics import diagnose_retrieval_failure
+from my_project.pipeline import get_rag_pipeline
+
+app = FastAPI()
+logger = logging.getLogger("rag_diagnostics")
+
+class QueryRequest(BaseModel):
+    query: str
+    expected_answer: str | None = None
+
+@app.post("/query")
+async def run_query(request: QueryRequest):
+    pipeline = get_rag_pipeline()
+    
+    # Run the query as usual
+    inputs = {
+        "retriever": {"query": request.query},
+        "prompt_builder": {"query": request.query}
+    }
+    result = pipeline.run(inputs)
+    answer = result.get("generator", {}).get("replies", [None])[0]
+    
+    # If the answer is missing, too short, or indicates refusal, trigger diagnostics
+    if not answer or any(w in answer.lower() for w in ["sorry", "don't know", "not mentioned"]):
+        report = diagnose_retrieval_failure(
+            pipeline=pipeline,
+            query=request.query,
+            pipeline_inputs=inputs,
+            expected_answer=request.expected_answer,
+            ranking_threshold=0.65
+        )
+        # Log the classified failure type (NO_RESULTS, RANKING_FAILURE, etc.)
+        logger.error(f"RAG Failure: {report['failure_type']} | Details: {report['diagnostics']}")
+        
+    return {"answer": answer}
+```
+
+### 2. Post-Ingestion Health Check (Scheduled Cron)
+Verify the state of your document store after bulk uploads or on a cron schedule to alert on malformed documents:
+
+```python
+import sys
+from diagnostics import validate_document_store
+from my_project.db import get_document_store
+
+def run_health_check():
+    store = get_document_store()
+    report = validate_document_store(
+        document_store=store,
+        expected_metadata_keys=["source", "author"],
+        expected_embedding_dim=1536
+    )
+    
+    if report["summary"]["invalid_documents"] > 0:
+        print(f"ALERT: Detected {report['summary']['total_issues_found']} ingestion errors!")
+        sys.exit(1)
+        
+if __name__ == "__main__":
+    run_health_check()
+```
+
+### 3. CI/CD Topology Verification
+Verify that architectural constraints are not violated by developers modifying pipeline components:
+
+```python
+# test_architecture.py
+from diagnostics import inspect_pipeline
+from my_project.pipeline import build_pipeline
+
+def test_pipeline_layout_constraints():
+    pipe = build_pipeline()
+    report = inspect_pipeline(pipe)
+    
+    # Assert structural layout: reranker must send documents to prompt_builder
+    connections = report["connections"]
+    assert any(
+        c["sender"] == "reranker" and c["receiver"] == "prompt_builder"
+        for c in connections
+    ), "Architecture Error: The Reranker output is not connected to the PromptBuilder."
+```
+
+---
+
 ## Running the Demo
 
 To run the local diagnostics demo, execute:
