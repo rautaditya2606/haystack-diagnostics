@@ -138,6 +138,7 @@ def validate_document_store(
     filters: Optional[Dict[str, Any]] = None,
     batch_size: int = 1000,
     validate_embeddings: bool = True,
+    max_docs_for_duplicate_check: Optional[int] = 500_000,
 ) -> Dict[str, Any]:
     """
     Validates the health of the documents within a Haystack Document Store.
@@ -152,6 +153,7 @@ def validate_document_store(
 
     NOTE: Duplicate detection requires maintaining content hash indexes in memory.
     This scales linearly with the number of unique documents (O(N) memory complexity).
+    Use max_docs_for_duplicate_check to cap memory usage on very large stores.
 
     :param document_store: The Haystack DocumentStore instance.
     :param expected_metadata_keys: Optional list of keys that must be present in document metadata.
@@ -160,6 +162,10 @@ def validate_document_store(
     :param filters: Optional filters dictionary to restrict which documents are validated.
     :param batch_size: Size of batches to stream from database.
     :param validate_embeddings: Whether to fetch and validate embeddings (turn off to optimize memory/speed).
+    :param max_docs_for_duplicate_check: Maximum number of documents to include in duplicate detection.
+        Once the running document count exceeds this limit, the hash index is cleared and duplicate
+        detection is skipped for the remainder of the scan. Set to None to disable the cap (not
+        recommended for stores with more than ~1M documents). Defaults to 500,000.
     :return: A dictionary containing the validation summary and detailed results.
     """
     total_docs = 0
@@ -170,8 +176,10 @@ def validate_document_store(
     short_chunk_ids = []
     null_embedding_ids = []
     
-    # Hash map for duplicate detection (O(N) memory on hashes and IDs)
+    # Hash map for duplicate detection (O(N) memory on hashes and IDs).
+    # Cleared and skipped once total_docs exceeds max_docs_for_duplicate_check.
     hash_map = defaultdict(list)
+    duplicate_check_skipped = False
     
     # Metadata tracker
     missing_metadata_details = []
@@ -211,8 +219,19 @@ def validate_document_store(
                     invalid_doc_ids.add(doc_id)
                 
                 # 4. Duplicate chunks (MD5 hash)
-                content_hash = hashlib.md5(doc.content.encode("utf-8")).hexdigest()
-                hash_map[content_hash].append(doc_id)
+                if not duplicate_check_skipped:
+                    if max_docs_for_duplicate_check is not None and total_docs > max_docs_for_duplicate_check:
+                        duplicate_check_skipped = True
+                        hash_map.clear()  # Free already-accumulated memory
+                        logger.warning(
+                            f"Duplicate detection skipped: document count exceeded the "
+                            f"max_docs_for_duplicate_check limit of {max_docs_for_duplicate_check:,}. "
+                            "Results so far have been discarded. Pass max_docs_for_duplicate_check=None "
+                            "to disable this cap (may cause OOM on very large stores)."
+                        )
+                    else:
+                        content_hash = hashlib.md5(doc.content.encode("utf-8")).hexdigest()
+                        hash_map[content_hash].append(doc_id)
 
             # 5. Missing metadata fields
             if expected_metadata_keys:
@@ -276,7 +295,10 @@ def validate_document_store(
     status_content_none = "pass" if not content_none_ids else "fail"
     status_empty_content = "pass" if not empty_content_ids else "fail"
     status_short_chunks = "pass" if not short_chunk_ids else "warning"
-    status_duplicates = "pass" if not duplicates_list else "fail"
+    if duplicate_check_skipped:
+        status_duplicates = "skipped"
+    else:
+        status_duplicates = "pass" if not duplicates_list else "fail"
     status_missing_metadata = "pass" if not missing_metadata_details else "warning"
     
     if not validate_embeddings:
@@ -324,6 +346,10 @@ def validate_document_store(
                 "status": status_duplicates,
                 "count": len(duplicates_list),
                 "duplicates": duplicates_list,
+                "skipped_reason": (
+                    f"Document count exceeded max_docs_for_duplicate_check limit of "
+                    f"{max_docs_for_duplicate_check:,}. Increase or set to None to enable."
+                ) if duplicate_check_skipped else None,
             },
             "missing_metadata": {
                 "status": status_missing_metadata,
