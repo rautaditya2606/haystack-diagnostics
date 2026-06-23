@@ -37,10 +37,32 @@ Inspects a live Haystack pipeline and returns its structural metadata:
 
 ### 3. `diagnose_retrieval_failure(pipeline, query, ...)`
 Classifies query-level retrieval and pipeline failures by running the pipeline and extracting intermediate retriever outputs. It classifies failures in the following sequence:
-1. **No Results**: The retriever returned 0 documents.
-2. **Ranking Failure**: The retriever/ranker returned documents, but the top result's score (extracted from Haystack's `Document.score` attribute) was below the `ranking_threshold`.
-3. **Empty Context**: Documents were retrieved, but their combined content is empty or contains no usable text.
-4. **Generator Failure**: Relevant context was supplied, but the generator returned an empty response, an LLM refusal (e.g., "I don't know"), or did not match the `expected_answer` (if provided).
+1. **NO_RESULTS**: The retriever returned 0 documents.
+2. **SCORE_BELOW_CUTOFF** / **RANKING_FAILURE**: The top result's score was below `ranking_threshold`.
+   - With `relevant_doc_id` hint: classified as `SCORE_BELOW_CUTOFF` (expected doc not retrieved) or `CONTEXT_LOSS` (see below).
+   - Without hint: classified as `RANKING_FAILURE` (legacy, backwards-compatible).
+3. **CONTEXT_LOSS** *(requires `relevant_doc_id` + a reranker in the pipeline)*: The expected document was present in the retriever's raw output but was dropped by the reranker. Covers reranker demotion; prompt-builder truncation detection is a planned future extension.
+4. **EMPTY_CONTEXT**: Documents were retrieved, but their combined content is empty or contains no usable text.
+5. **GENERATOR_FAILURE**: Relevant context was supplied, but the generator returned an empty response, an LLM refusal (e.g., "I don't know"), or did not match the `expected_answer` (if provided).
+
+> **Runtime safety**: If a reranker is detected in the pipeline but its intermediate output is missing from pre-computed `pipeline_outputs`, an explicit warning note is included in the return dict. There is no silent fallback to `RANKING_FAILURE`.
+
+### 4. `collect_debug_bundle(pipeline, query, ...)` — *new*
+Captures the full state of a single query execution as a structured, diffable JSON file on disk. Designed for the debugging workflow described by production users: run one query, persist everything, compare against a previous known-good run.
+
+Each bundle captures:
+- Pipeline graph, Haystack version, and component `init_parameters`
+- Raw retriever top-k (pre-reranker) — scores, metadata, content previews
+- Reranked top-k (when a reranker is detected)
+- Prompt snapshot and generated answer
+- Failure classification
+- Corpus health checks **scoped only to the retrieved document IDs** (not the full store)
+
+**Bundle filename**: `{query_slug}_{timestamp}.json` — human-readable, sorts naturally across runs of the same query. The `bundle_id` UUID lives inside the JSON.
+
+**`diff_debug_bundles(bundle_a, bundle_b)`**: Compares two persisted bundles and reports score deltas per document, docs that appeared or disappeared, component config changes, and a character-level answer diff (via `difflib`, no tokenizer dependency).
+
+**CLI**: `python -m diagnostics.debug_bundler diff <bundle_a.json> <bundle_b.json>`
 
 ---
 
@@ -243,7 +265,13 @@ from haystack.components.retrievers.in_memory import InMemoryBM25Retriever
 from haystack.components.builders import PromptBuilder
 
 # Import the diagnostic tools
-from diagnostics import validate_document_store, inspect_pipeline, diagnose_retrieval_failure
+from diagnostics import (
+    validate_document_store,
+    inspect_pipeline,
+    diagnose_retrieval_failure,
+    collect_debug_bundle,
+    diff_debug_bundles,
+)
 
 # 1. Validate Document Store Ingestion Health
 document_store = InMemoryDocumentStore()
@@ -266,6 +294,7 @@ structure = inspect_pipeline(pipe)
 print("Mermaid graph:\n", structure["mermaid"])
 
 # 3. Diagnose Retrieval Failures
+# Basic usage (legacy RANKING_FAILURE bucket)
 diagnostics = diagnose_retrieval_failure(
     pipeline=pipe,
     query="What is the capital of France?",
@@ -273,7 +302,46 @@ diagnostics = diagnose_retrieval_failure(
     ranking_threshold=0.6
 )
 print("Primary Failure Type:", diagnostics["failure_type"])
-print("Diagnostics Summary:", diagnostics["diagnostics"])
+
+# Enhanced usage with relevant_doc_id hint for SCORE_BELOW_CUTOFF / CONTEXT_LOSS split
+diagnostics = diagnose_retrieval_failure(
+    pipeline=pipe,
+    query="What is the capital of France?",
+    relevant_doc_id="doc-france-wiki",   # expected doc ID
+    reranker_component_name="ranker",     # optional, auto-discovered if None
+    ranking_threshold=0.6
+)
+print("Failure Subtype:", diagnostics["diagnostics"]["ranking"]["failure_subtype"])
+# -> SCORE_BELOW_CUTOFF if doc not retrieved
+# -> CONTEXT_LOSS if doc retrieved but reranker dropped it
+
+# 4. Collect a Debug Bundle for a single query
+bundle = collect_debug_bundle(
+    query="What is the capital of France?",
+    pipeline=pipe,
+    document_store=document_store,    # optional; enables scoped corpus checks
+    relevant_doc_id="doc-france-wiki", # optional; enables CONTEXT_LOSS detection
+    output_dir="./debug_bundles",     # default; writes {query_slug}_{timestamp}.json
+)
+print("Bundle written to:", bundle["_bundle_path"])
+print("Failure type:", bundle["failure_type"])
+print("Raw top-k:", bundle["retrieval"]["raw_top_k"])
+
+# 5. Diff two bundles to find what changed between runs
+diff = diff_debug_bundles(
+    "./debug_bundles/what_is_the_capital_20260601T120000Z.json",
+    "./debug_bundles/what_is_the_capital_20260602T090000Z.json",
+)
+print("Failure type changed:", diff["failure_type_change"]["changed"])
+print("Score deltas:", diff["score_deltas"])
+print("Answer diff:\n", diff["answer_diff"])
+```
+
+#### Diff via CLI
+```bash
+python -m diagnostics.debug_bundler diff \
+    debug_bundles/what_is_the_capital_20260601T120000Z.json \
+    debug_bundles/what_is_the_capital_20260602T090000Z.json
 ```
 
 ---
@@ -385,21 +453,25 @@ haystack-diagnostics/
 │   ├── __init__.py
 │   ├── document_validator.py
 │   ├── pipeline_inspector.py
-│   └── failure_diagnoser.py
+│   ├── failure_diagnoser.py
+│   └── debug_bundler.py          # collect_debug_bundle, diff_debug_bundles, CLI
 │
 ├── mcp/
-│   └── server.py                  # MCP server wrapper (<200 lines)
+│   └── server.py                 # MCP server (validate_store, inspect_pipeline_graph,
+│                                 #             diagnose_retrieval, collect_debug_bundle_tool)
 │
 ├── demo/
-│   └── sample_pipeline.py         # Out-of-the-box local demo run
+│   └── sample_pipeline.py        # Out-of-the-box local demo run
 │
-├── tests/                         # Unit tests
+├── tests/
 │   ├── test_document_validator.py
 │   ├── test_pipeline_inspector.py
-│   └── test_failure_diagnoser.py
+│   ├── test_failure_diagnoser.py
+│   ├── test_debug_bundler.py     # Bundle schema, filename, corpus check, diff, CONTEXT_LOSS
+│   └── smoke_mcp.py              # MCP end-to-end smoke test (content/path/precedence/error)
 │
-├── pyproject.toml                 # Package metadata and build system setup
-├── requirements.txt               # Pinned dependencies for environment replication
+├── pyproject.toml                # Package metadata and build system setup
+├── requirements.txt              # Pinned dependencies for environment replication
 └── README.md
 ```
 
@@ -407,13 +479,16 @@ haystack-diagnostics/
 
 ## Running the Tests
 
-The project includes a complete suite of unit tests verifying validator edge cases, Mermaid graph exports, and sequential RAG query classification. All tests are fully implemented, execute offline, and require zero external API keys:
+The project includes a complete suite of unit tests verifying validator edge cases, Mermaid graph exports, sequential RAG query classification, debug bundle schema and diff behaviour, and MCP tool end-to-end smoke tests. All tests run fully offline and require zero external API keys.
 
+**45 tests across 5 test files:**
 - `tests/test_document_validator.py`: Verifies the 7 document store validation checks using mock documents.
 - `tests/test_pipeline_inspector.py`: Validates component detail extraction, socket parsing, and Mermaid graph output.
-- `tests/test_failure_diagnoser.py`: Verifies the sequential failure engine (`NO_RESULTS`, `RANKING_FAILURE`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`) using mock retrievers and generators.
+- `tests/test_failure_diagnoser.py`: Verifies the failure classification engine (`NO_RESULTS`, `RANKING_FAILURE`, `SCORE_BELOW_CUTOFF`, `CONTEXT_LOSS`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`), including backwards compatibility and the reranker-detected-but-not-captured warning.
+- `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle, and `diff_debug_bundles()` score/appearance/config/answer detection.
+- `tests/smoke_mcp.py`: End-to-end MCP smoke test covering `collect_debug_bundle_tool` with inline content, file path, `content > path` precedence, and neither-provided error handling.
 
-To run the test suite:
+To run the full test suite:
 ```bash
 pytest tests/
 ```
@@ -454,7 +529,18 @@ Add the following configuration to your `claude_desktop_config.json`:
 }
 ```
 
-Once connected, Claude can automatically validate document store health, query pipeline graphs, and debug retrieval issues on your local workspace.
+Once connected, Claude can automatically validate document store health, query pipeline graphs, debug retrieval failures, and collect full debug bundles for individual queries.
+
+### MCP Tools
+
+| Tool | Description |
+|---|---|
+| `validate_store` | Validates document store health (content, duplicates, embeddings, metadata) |
+| `inspect_pipeline_graph` | Returns components, sockets, connections, and Mermaid diagram for a pipeline |
+| `diagnose_retrieval` | Runs failure classification with optional `relevant_doc_id` and `reranker_component_name` |
+| `collect_debug_bundle_tool` | Captures the full debug bundle for one query — raw top-k, reranked top-k, prompt, answer, corpus checks, failure type — and persists to disk |
+
+All tools accept `pipeline_config_content` (inline YAML/JSON string) or `pipeline_config_path` (file path). **`pipeline_config_content` takes precedence** if both are provided.
 
 ### MCP Tool Invocation Example
 
