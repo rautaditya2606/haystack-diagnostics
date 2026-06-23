@@ -1,0 +1,139 @@
+{
+  "bundle_id": "4ae0385b-def1-4739-9148-1e3fa0280ac8",
+  "created_at": "2026-06-23T17:17:40.594570+00:00",
+  "query": "serialization",
+  "pipeline": {
+    "haystack_version": "2.29.0",
+    "metadata": {},
+    "components": {
+      "retriever": {
+        "type": "haystack.components.retrievers.in_memory.bm25_retriever.InMemoryBM25Retriever",
+        "init_parameters": {
+          "document_store": {
+            "type": "haystack.document_stores.in_memory.document_store.InMemoryDocumentStore",
+            "init_parameters": {
+              "bm25_tokenization_regex": "(?u)\\b\\w+\\b",
+              "bm25_algorithm": "BM25L",
+              "bm25_parameters": {},
+              "embedding_similarity_function": "dot_product",
+              "index": "7e6ad573-407b-4c0b-a2e1-bc30703c7c82",
+              "return_embedding": true
+            }
+          },
+          "filters": null,
+          "top_k": 10,
+          "scale_score": false,
+          "filter_policy": "replace"
+        }
+      }
+    },
+    "connections": [],
+    "mermaid": "\n%%{ init: {} }%%\n\ngraph TD;\n\ni{&ast;}--\"query<br><small><i>str</i></small>\"--> retriever[\"<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>\"]:::component\nretriever[\"<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>\"]:::component--\"documents<br><small><i>list[Document]</i></small>\"--> o{&ast;}\n\nclassDef component text-align:center;\n\n"
+  },
+  "retrieval": {
+    "retriever_component": "retriever",
+    "doc_count": 1,
+    "raw_top_k": [
+      {
+        "rank": 1,
+        "id": "meta_doc_1",
+        "score": 0.35960259056472604,
+        "content_preview": "Testing serialization of weird types.",
+        "meta": {
+          "created": "2026-06-23T17:17:40.594226+00:00",
+          "obj_id": "335027f0-97b2-4aba-af81-1f073bdaea90",
+          "numpy_val": 3.1414999961853027,
+          "numpy_arr": [
+            1.0,
+            2.0,
+            3.0
+          ],
+          "decimal_val": 123.45,
+          "custom_obj": "<object object at 0x7fdf007ed420>"
+        }
+      }
+    ]
+  },
+  "reranker": {
+    "detected": false,
+    "component": null,
+    "reranked_top_k": null,
+    "note": null
+  },
+  "generation": {
+    "component": null,
+    "prompt_snapshot": null,
+    "answer": null
+  },
+  "failure_type": "RANKING_FAILURE",
+  "diagnostics": {
+    "retriever": {
+      "component_name": "retriever",
+      "documents_retrieved": 1,
+      "top_score": 0.35960259056472604,
+      "documents": [
+        {
+          "id": "meta_doc_1",
+          "score": 0.35960259056472604,
+          "content_preview": "Testing serialization of weird types....",
+          "meta": {
+            "created": "2026-06-23T17:17:40.594226+00:00",
+            "obj_id": "335027f0-97b2-4aba-af81-1f073bdaea90",
+            "numpy_val": 3.1414999961853027,
+            "numpy_arr": [
+              1.0,
+              2.0,
+              3.0
+            ],
+            "decimal_val": 123.45,
+            "custom_obj": "<object object at 0x7fdf007ed420>"
+          },
+          "rank": 1
+        }
+      ]
+    },
+    "reranker": {
+      "component_name": null,
+      "detected": false,
+      "reranked_documents": null,
+      "note": null
+    },
+    "context": {
+      "total_length_chars": 0,
+      "has_usable_context": true
+    },
+    "generator": {
+      "component_name": null,
+      "generated_answer": null,
+      "is_refusal": false,
+      "matches_expected": null
+    },
+    "ranking": {
+      "ranking_threshold": 0.5,
+      "top_score": 0.35960259056472604,
+      "is_below_threshold": true,
+      "relevant_doc_id": null,
+      "failure_subtype": "RANKING_FAILURE"
+    },
+    "triggered_checks": {
+      "no_results": false,
+      "empty_context": false,
+      "generator_failure": false,
+      "ranking_failure": true
+    }
+  },
+  "corpus_checks": {
+    "scoped_to_doc_ids": [
+      "meta_doc_1"
+    ],
+    "docs_found": 1,
+    "issues": [
+      {
+        "doc_id": "meta_doc_1",
+        "issue": "null_embedding"
+      }
+    ],
+    "skipped": false
+  },
+  "_bundle_path": "test_debug_bundles/serialization_20260623T171740Z_4ae0385b.json"
+}

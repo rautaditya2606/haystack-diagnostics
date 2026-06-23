@@ -66,7 +66,7 @@ def _extract_doc_snapshots(docs: List[Any]) -> List[Dict[str, Any]]:
         content = doc.content or ""
         snapshots.append({
             "rank": idx + 1,
-            "id": doc.id,
+            "id": doc.id or f"autogen_id_{idx}",
             "score": doc.score,
             "content_preview": (content[:200] + "...") if len(content) > 200 else content,
             "meta": _clean_metadata(doc.meta or {}),
@@ -153,6 +153,7 @@ def collect_debug_bundle(
     ranking_threshold: float = 0.5,
     relevant_doc_id: Optional[str] = None,
     output_dir: str = "./debug_bundles",
+    pipeline_outputs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Captures the full state of a single query execution as a structured, diffable JSON bundle.
@@ -184,6 +185,7 @@ def collect_debug_bundle(
     :param ranking_threshold: Score threshold for SCORE_BELOW_CUTOFF classification.
     :param relevant_doc_id: Optional expected doc ID for CONTEXT_LOSS detection.
     :param output_dir: Directory to write bundle JSON. Defaults to ./debug_bundles (cwd).
+    :param pipeline_outputs: Optional pre-computed pipeline run outputs.
     :return: The bundle as a Python dict (also persisted to disk).
     """
     bundle_id = str(uuid.uuid4())
@@ -202,35 +204,62 @@ def collect_debug_bundle(
     if not reranker_component_name:
         reranker_component_name = _discover_reranker_name(pipeline)
 
+    # --- Auto-discover prompt builder ---
+    prompt_builder_name = None
+    if hasattr(pipeline, "graph") and pipeline.graph is not None:
+        for node_name, attrs in pipeline.graph.nodes(data=True):
+            instance = attrs.get("instance")
+            class_name = instance.__class__.__name__ if instance else ""
+            if "PromptBuilder" in class_name:
+                prompt_builder_name = node_name
+                break
+    else:
+        try:
+            pipe_dict = pipeline.to_dict()
+            for comp_name, comp_info in pipe_dict.get("components", {}).items():
+                type_str = comp_info.get("type", "")
+                class_name = type_str.split(".")[-1]
+                if "PromptBuilder" in class_name:
+                    prompt_builder_name = comp_name
+                    break
+        except Exception:
+            pass
+
     # --- Build include_outputs_from ---
     include_from = {retriever_component_name}
     if reranker_component_name:
         include_from.add(reranker_component_name)
+    if prompt_builder_name:
+        include_from.add(prompt_builder_name)
 
-    # --- Build pipeline inputs ---
-    if pipeline_inputs is None:
-        pipeline_inputs = {}
+    # --- Execute pipeline or use pre-computed outputs ---
+    if pipeline_outputs is not None:
+        results = pipeline_outputs
+    else:
+        # --- Build pipeline inputs ---
+        if pipeline_inputs is None:
+            pipeline_inputs = {}
+            try:
+                inputs_schema = pipeline.inputs()
+            except Exception:
+                inputs_schema = {}
+            for comp_name, sockets in inputs_schema.items():
+                comp_inputs = pipeline_inputs.setdefault(comp_name, {})
+                for socket_name in sockets:
+                    if socket_name in ("query", "text", "question") and socket_name not in comp_inputs:
+                        comp_inputs[socket_name] = query
+
+        # --- Run pipeline ---
         try:
-            inputs_schema = pipeline.inputs()
-        except Exception:
-            inputs_schema = {}
-        for comp_name, sockets in inputs_schema.items():
-            comp_inputs = pipeline_inputs.setdefault(comp_name, {})
-            for socket_name in sockets:
-                if socket_name in ("query", "text", "question") and socket_name not in comp_inputs:
-                    comp_inputs[socket_name] = query
-
-    # --- Run pipeline ---
-    try:
-        results = pipeline.run(data=pipeline_inputs, include_outputs_from=include_from)
-    except Exception as e:
-        return {
-            "bundle_id": bundle_id,
-            "created_at": created_at,
-            "query": query,
-            "status": "error",
-            "error": f"Pipeline execution failed: {str(e)}",
-        }
+            results = pipeline.run(data=pipeline_inputs, include_outputs_from=include_from)
+        except Exception as e:
+            return {
+                "bundle_id": bundle_id,
+                "created_at": created_at,
+                "query": query,
+                "status": "error",
+                "error": f"Pipeline execution failed: {str(e)}",
+            }
 
     # --- Extract retriever docs ---
     retriever_output = results.get(retriever_component_name, {})
@@ -289,7 +318,7 @@ def collect_debug_bundle(
         haystack_version = "unknown"
 
     # --- Scoped corpus check ---
-    retrieved_doc_ids = [doc.id for doc in raw_docs]
+    retrieved_doc_ids = [doc.id for doc in raw_docs if doc.id is not None]
     corpus_checks = _scoped_corpus_check(document_store, retrieved_doc_ids)
 
     # --- Assemble bundle ---
@@ -331,13 +360,15 @@ def collect_debug_bundle(
 
     slug = _query_slug(query)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"{slug}_{timestamp}.json"
+    # Append first 8 characters of bundle_id to guarantee unique filenames (prevent collisions)
+    filename = f"{slug}_{timestamp}_{bundle_id[:8]}.json"
     bundle_path = out_path / filename
+
+    bundle["_bundle_path"] = str(bundle_path)
 
     with open(bundle_path, "w", encoding="utf-8") as f:
         json.dump(bundle, f, indent=2, default=str)
 
-    bundle["_bundle_path"] = str(bundle_path)
     return bundle
 
 
@@ -362,8 +393,8 @@ def diff_debug_bundles(bundle_a_path: str, bundle_b_path: str) -> Dict[str, Any]
 
     def _score_map(bundle: Dict) -> Dict[str, Optional[float]]:
         return {
-            doc["id"]: doc["score"]
-            for doc in bundle.get("retrieval", {}).get("raw_top_k", [])
+            (doc.get("id") or f"autogen_id_{idx}"): doc.get("score")
+            for idx, doc in enumerate(bundle.get("retrieval", {}).get("raw_top_k", []))
         }
 
     scores_a = _score_map(a)

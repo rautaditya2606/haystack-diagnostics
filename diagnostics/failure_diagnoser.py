@@ -5,19 +5,52 @@ from typing import Any, Dict, List, Optional
 
 
 def _clean_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively converts non-serializable fields (like UUIDs/datetimes) to strings."""
+    """Recursively converts non-serializable fields to strings and handles numpy/Decimal types."""
+    import decimal
+    import json
+
     cleaned = {}
     for k, v in meta.items():
         if isinstance(v, uuid.UUID):
             cleaned[k] = str(v)
         elif isinstance(v, datetime):
             cleaned[k] = v.isoformat()
+        elif isinstance(v, decimal.Decimal):
+            cleaned[k] = float(v)
+        elif hasattr(v, 'tolist') and hasattr(v, '__len__'):
+            cleaned[k] = v.tolist()
+        elif hasattr(v, 'item') and type(v).__module__ == 'numpy':
+            cleaned[k] = v.item()
         elif isinstance(v, dict):
             cleaned[k] = _clean_metadata(v)
         elif isinstance(v, list):
-            cleaned[k] = [str(x) if isinstance(x, uuid.UUID) else x for x in v]
+            cleaned_list = []
+            for x in v:
+                if isinstance(x, dict):
+                    cleaned_list.append(_clean_metadata(x))
+                elif isinstance(x, uuid.UUID):
+                    cleaned_list.append(str(x))
+                elif isinstance(x, datetime):
+                    cleaned_list.append(x.isoformat())
+                elif isinstance(x, decimal.Decimal):
+                    cleaned_list.append(float(x))
+                elif hasattr(x, 'tolist') and hasattr(x, '__len__'):
+                    cleaned_list.append(x.tolist())
+                elif hasattr(x, 'item') and type(x).__module__ == 'numpy':
+                    cleaned_list.append(x.item())
+                else:
+                    try:
+                        json.dumps(x)
+                        cleaned_list.append(x)
+                    except Exception:
+                        cleaned_list.append(str(x))
+            cleaned[k] = cleaned_list
         else:
-            cleaned[k] = v
+            try:
+                json.dumps(v)
+                cleaned[k] = v
+            except Exception:
+                cleaned[k] = str(v)
     return cleaned
 
 
@@ -52,24 +85,28 @@ def _discover_component_names(pipeline):
 def _discover_reranker_name(pipeline) -> Optional[str]:
     """
     Scans the pipeline structure to automatically find a reranker component name.
+    Alphabetically sorts discovered ranker names to make selection deterministic.
     Returns None if no reranker is present in the pipeline.
     """
+    names = []
     if hasattr(pipeline, "graph") and pipeline.graph is not None:
         for node_name, attrs in pipeline.graph.nodes(data=True):
             instance = attrs.get("instance")
             class_name = instance.__class__.__name__ if instance else ""
-            if "Ranker" in class_name:
-                return node_name
+            if "rank" in class_name.lower():
+                names.append(node_name)
     else:
         try:
             pipe_dict = pipeline.to_dict()
             for comp_name, comp_info in pipe_dict.get("components", {}).items():
                 type_str = comp_info.get("type", "")
                 class_name = type_str.split(".")[-1]
-                if "Ranker" in class_name:
-                    return comp_name
+                if "rank" in class_name.lower():
+                    names.append(comp_name)
         except Exception:
             pass
+    if names:
+        return sorted(names)[0]
     return None
 
 
@@ -236,7 +273,7 @@ def diagnose_retrieval_failure(
             top_score = top_doc.score
 
         if relevant_doc_id is not None:
-            retrieved_ids = {doc.id for doc in retrieved_docs}
+            retrieved_ids = {doc.id for doc in retrieved_docs if doc.id is not None}
 
             if relevant_doc_id not in retrieved_ids:
                 # Expected doc was never retrieved
@@ -244,7 +281,7 @@ def diagnose_retrieval_failure(
                 ranking_failure_subtype = "SCORE_BELOW_CUTOFF"
             elif reranker_component_name and reranked_docs is not None:
                 # Expected doc was retrieved — check if reranker dropped it
-                reranked_ids = {doc.id for doc in reranked_docs}
+                reranked_ids = {doc.id for doc in reranked_docs if doc.id is not None}
                 if relevant_doc_id not in reranked_ids:
                     triggered_checks["ranking_failure"] = True
                     ranking_failure_subtype = "CONTEXT_LOSS"

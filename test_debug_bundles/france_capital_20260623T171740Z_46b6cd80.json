@@ -1,0 +1,95 @@
+{
+  "bundle_id": "46b6cd80-8080-4ae7-a71a-eb77f2b5d7d2",
+  "created_at": "2026-06-23T17:17:40.592872+00:00",
+  "query": "france capital",
+  "pipeline": {
+    "haystack_version": "2.29.0",
+    "metadata": {},
+    "components": {
+      "retriever": {
+        "type": "haystack.components.retrievers.in_memory.bm25_retriever.InMemoryBM25Retriever",
+        "init_parameters": {
+          "document_store": {
+            "type": "haystack.document_stores.in_memory.document_store.InMemoryDocumentStore",
+            "init_parameters": {
+              "bm25_tokenization_regex": "(?u)\\b\\w+\\b",
+              "bm25_algorithm": "BM25L",
+              "bm25_parameters": {},
+              "embedding_similarity_function": "dot_product",
+              "index": "ee2f8eb4-f01a-427f-8508-46308c6c1704",
+              "return_embedding": true
+            }
+          },
+          "filters": null,
+          "top_k": 2,
+          "scale_score": false,
+          "filter_policy": "replace"
+        }
+      }
+    },
+    "connections": [],
+    "mermaid": "\n%%{ init: {} }%%\n\ngraph TD;\n\ni{&ast;}--\"query<br><small><i>str</i></small>\"--> retriever[\"<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>\"]:::component\nretriever[\"<b>retriever</b><br><small><i>InMemoryBM25Retriever<br><br>Optional inputs:<ul style='text-align:left;'><li>filters (dict[str, Any] | None)</li><li>top_k (int | None)</li><li>scale_score (bool | None)</li></ul></i></small>\"]:::component--\"documents<br><small><i>list[Document]</i></small>\"--> o{&ast;}\n\nclassDef component text-align:center;\n\n"
+  },
+  "retrieval": {
+    "retriever_component": "retriever",
+    "doc_count": 0,
+    "raw_top_k": []
+  },
+  "reranker": {
+    "detected": false,
+    "component": null,
+    "reranked_top_k": null,
+    "note": null
+  },
+  "generation": {
+    "component": null,
+    "prompt_snapshot": null,
+    "answer": null
+  },
+  "failure_type": "NO_RESULTS",
+  "diagnostics": {
+    "retriever": {
+      "component_name": "retriever",
+      "documents_retrieved": 0,
+      "top_score": null,
+      "documents": []
+    },
+    "reranker": {
+      "component_name": null,
+      "detected": false,
+      "reranked_documents": null,
+      "note": null
+    },
+    "context": {
+      "total_length_chars": 0,
+      "has_usable_context": false
+    },
+    "generator": {
+      "component_name": null,
+      "generated_answer": null,
+      "is_refusal": false,
+      "matches_expected": null
+    },
+    "ranking": {
+      "ranking_threshold": 0.5,
+      "top_score": null,
+      "is_below_threshold": false,
+      "relevant_doc_id": null,
+      "failure_subtype": null
+    },
+    "triggered_checks": {
+      "no_results": true,
+      "empty_context": false,
+      "generator_failure": false,
+      "ranking_failure": false
+    }
+  },
+  "corpus_checks": {
+    "scoped_to_doc_ids": [],
+    "docs_found": 0,
+    "issues": [],
+    "skipped": true,
+    "reason": "No document store provided or no documents were retrieved."
+  },
+  "_bundle_path": "test_debug_bundles/france_capital_20260623T171740Z_46b6cd80.json"
+}
