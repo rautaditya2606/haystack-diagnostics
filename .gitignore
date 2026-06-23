@@ -7,3 +7,5 @@ __pycache__/
 
 # Test cache
 .pytest_cache/
+test_debug_bundles/
+debug_bundles/
