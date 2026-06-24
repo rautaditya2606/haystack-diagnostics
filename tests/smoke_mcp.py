@@ -54,6 +54,9 @@ def build_pipeline_yaml() -> str:
 PIPELINE_YAML = build_pipeline_yaml()
 QUERY = "Where is the Eiffel Tower?"
 
+# Use the platform's temp dir so the smoke test is portable on Windows, macOS, and Linux
+SMOKE_OUTPUT_DIR = str(Path(tempfile.gettempdir()) / "mcp_smoke_bundles")
+
 PASS = "\033[92m✓ PASS\033[0m"
 FAIL = "\033[91m✗ FAIL\033[0m"
 failures = []
@@ -75,7 +78,7 @@ result_str = collect_debug_bundle_tool(
     query=QUERY,
     pipeline_config_content=PIPELINE_YAML,
     retriever_component_name="retriever",
-    output_dir="/tmp/mcp_smoke_bundles",
+    output_dir=SMOKE_OUTPUT_DIR,
 )
 
 try:
@@ -109,7 +112,7 @@ result_str2 = collect_debug_bundle_tool(
     query=QUERY,
     pipeline_config_path=yaml_path,
     retriever_component_name="retriever",
-    output_dir="/tmp/mcp_smoke_bundles",
+    output_dir=SMOKE_OUTPUT_DIR,
 )
 
 try:
@@ -134,7 +137,7 @@ result_str3 = collect_debug_bundle_tool(
     pipeline_config_content=PIPELINE_YAML,   # valid content
     pipeline_config_path="/nonexistent/path/pipeline.yaml",  # bad path — should be ignored
     retriever_component_name="retriever",
-    output_dir="/tmp/mcp_smoke_bundles",
+    output_dir=SMOKE_OUTPUT_DIR,
 )
 try:
     result3 = json.loads(result_str3)
@@ -149,7 +152,7 @@ except json.JSONDecodeError:
 print("\n[4] Error when neither pipeline_config_content nor pipeline_config_path provided")
 result_str4 = collect_debug_bundle_tool(
     query=QUERY,
-    output_dir="/tmp/mcp_smoke_bundles",
+    output_dir=SMOKE_OUTPUT_DIR,
 )
 check("Returns error string (not exception)", "error" in result_str4.lower() or "Error" in result_str4)
 check("Does not contain bundle_id", "bundle_id" not in result_str4)

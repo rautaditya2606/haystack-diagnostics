@@ -15,7 +15,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Union
 
 from diagnostics.failure_diagnoser import (
     _clean_metadata,
@@ -24,6 +24,25 @@ from diagnostics.failure_diagnoser import (
     diagnose_retrieval_failure,
 )
 from diagnostics.pipeline_inspector import inspect_pipeline
+
+
+# ---------------------------------------------------------------------------
+# Default set of known volatile init_parameter keys to suppress in config diffs.
+#
+# These are fields that change between runs even when the pipeline is logically
+# identical — most notably InMemoryDocumentStore.index, which is a random UUID
+# generated at instantiation time.
+#
+# Format: "component_name.param_key"  — suppresses only for that component.
+#         "*.param_key"               — suppresses the key across ALL components.
+#
+# Pass an empty set to disable all filtering:
+#   diff_debug_bundles(a, b, ignore_config_paths=set())
+# ---------------------------------------------------------------------------
+DEFAULT_VOLATILE_CONFIG_PATHS: FrozenSet[str] = frozenset({
+    # InMemoryDocumentStore generates a new UUID index on every instantiation.
+    "*.index",
+})
 
 
 def _query_slug(query: str, max_len: int = 40) -> str:
@@ -372,20 +391,32 @@ def collect_debug_bundle(
     return bundle
 
 
-def diff_debug_bundles(bundle_a_path: str, bundle_b_path: str) -> Dict[str, Any]:
+def diff_debug_bundles(
+    bundle_a_path: str,
+    bundle_b_path: str,
+    ignore_config_paths: Optional[Union[Set[str], FrozenSet[str]]] = None,
+) -> Dict[str, Any]:
     """
     Compares two persisted debug bundle JSON files and returns a structured diff.
 
     Reports:
     - Failure type change between runs
     - Score delta per document ID (documents that appeared, disappeared, or changed score)
-    - Component init_parameters changes
+    - Component init_parameters changes (with volatile fields suppressed by default)
     - Answer diff (character-level unified diff via difflib — no tokenizer dependency)
 
     :param bundle_a_path: Path to the baseline bundle JSON file.
     :param bundle_b_path: Path to the comparison bundle JSON file.
+    :param ignore_config_paths: Set of ``"component_name.param_key"`` strings to exclude
+        from the config diff.  Use ``"*.param_key"`` to ignore a param across *all*
+        components.  Defaults to :data:`DEFAULT_VOLATILE_CONFIG_PATHS` which suppresses
+        known runtime-volatile fields (e.g. ``InMemoryDocumentStore.index`` UUID).
+        Pass an empty set to disable all filtering.
     :return: A structured diff dictionary.
     """
+    if ignore_config_paths is None:
+        ignore_config_paths = DEFAULT_VOLATILE_CONFIG_PATHS
+
     with open(bundle_a_path, "r", encoding="utf-8") as f:
         a = json.load(f)
     with open(bundle_b_path, "r", encoding="utf-8") as f:
@@ -420,13 +451,24 @@ def diff_debug_bundles(bundle_a_path: str, bundle_b_path: str) -> Dict[str, Any]
         else:
             disappeared.append({"id": doc_id, "score_a": scores_a[doc_id]})
 
-    # Config diff
+    # Config diff — filter out known volatile (or user-specified) param keys
+    def _filter_volatile(comp_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove ignored keys from a component's init_parameters before diffing."""
+        result = {}
+        for key, value in params.items():
+            wildcard = f"*.{key}"
+            specific = f"{comp_name}.{key}"
+            if wildcard in ignore_config_paths or specific in ignore_config_paths:
+                continue
+            result[key] = value
+        return result
+
     comps_a = a.get("pipeline", {}).get("components", {})
     comps_b = b.get("pipeline", {}).get("components", {})
     config_changes: Dict[str, Any] = {}
     for comp in set(comps_a) | set(comps_b):
-        params_a = comps_a.get(comp, {}).get("init_parameters", {})
-        params_b = comps_b.get(comp, {}).get("init_parameters", {})
+        params_a = _filter_volatile(comp, comps_a.get(comp, {}).get("init_parameters", {}))
+        params_b = _filter_volatile(comp, comps_b.get(comp, {}).get("init_parameters", {}))
         if params_a != params_b:
             config_changes[comp] = {"before": params_a, "after": params_b}
 

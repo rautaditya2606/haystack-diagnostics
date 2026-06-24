@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "haystack-ai>=2.0.0",
+    "haystack-ai>=2.29.0",  # 2.29.0 is the minimum tested version; see requirements.txt for the pinned lockfile
     "mcp>=1.0.0",
     "networkx>=3.0",
 ]

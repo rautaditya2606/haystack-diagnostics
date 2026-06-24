@@ -350,3 +350,71 @@ def test_diff_answer_no_change(tmp_path):
     bundle_b = _write_bundle(tmp_path, "b5", [], "Identical answer.")
     diff = diff_debug_bundles(bundle_a, bundle_b)
     assert diff["answer_diff"] == "(no change)"
+
+
+# ---------------------------------------------------------------------------
+# ignore_config_paths tests
+# ---------------------------------------------------------------------------
+
+def test_diff_ignore_config_paths_wildcard(tmp_path):
+    """Volatile fields matched by '*.field' must be excluded from config_changes.
+
+    This is the canonical regression for InMemoryDocumentStore.index — a random
+    UUID generated at instantiation that would otherwise always appear as a diff
+    even when the pipeline is logically unchanged between runs.
+    """
+    import uuid
+    config_a = {
+        "document_store": {
+            "type": "InMemoryDocumentStore",
+            "init_parameters": {"index": str(uuid.uuid4()), "embedding_similarity_function": "dot_product"},
+        }
+    }
+    config_b = {
+        "document_store": {
+            "type": "InMemoryDocumentStore",
+            "init_parameters": {"index": str(uuid.uuid4()), "embedding_similarity_function": "dot_product"},
+        }
+    }
+    bundle_a = _write_bundle(tmp_path, "volatile_a", [], "Answer.", config=config_a)
+    bundle_b = _write_bundle(tmp_path, "volatile_b", [], "Answer.", config=config_b)
+
+    # Default behaviour: index is in DEFAULT_VOLATILE_CONFIG_PATHS → no config changes
+    diff = diff_debug_bundles(bundle_a, bundle_b)
+    assert "document_store" not in diff["config_changes"], (
+        "Volatile 'index' field should be suppressed by default and not appear in config_changes."
+    )
+
+
+def test_diff_ignore_config_paths_component_specific(tmp_path):
+    """A 'component_name.param_key' path suppresses only that component's key."""
+    config_a = {
+        "retriever": {"type": "X", "init_parameters": {"top_k": 5, "session_id": "uuid-a"}},
+        "generator": {"type": "Y", "init_parameters": {"top_k": 5, "session_id": "uuid-c"}},
+    }
+    config_b = {
+        "retriever": {"type": "X", "init_parameters": {"top_k": 5, "session_id": "uuid-b"}},
+        "generator": {"type": "Y", "init_parameters": {"top_k": 5, "session_id": "uuid-d"}},
+    }
+    bundle_a = _write_bundle(tmp_path, "cs_a", [], "Answer.", config=config_a)
+    bundle_b = _write_bundle(tmp_path, "cs_b", [], "Answer.", config=config_b)
+
+    # Only suppress session_id for retriever — generator's session_id should still appear
+    diff = diff_debug_bundles(bundle_a, bundle_b, ignore_config_paths={"retriever.session_id"})
+    assert "retriever" not in diff["config_changes"], "retriever.session_id should be suppressed"
+    assert "generator" in diff["config_changes"], "generator.session_id should still be reported"
+
+
+def test_diff_ignore_config_paths_empty_set_shows_all(tmp_path):
+    """Passing an empty ignore set must report all differences, including volatile fields."""
+    import uuid
+    index_a, index_b = str(uuid.uuid4()), str(uuid.uuid4())
+    config_a = {"store": {"type": "InMemoryDocumentStore", "init_parameters": {"index": index_a}}}
+    config_b = {"store": {"type": "InMemoryDocumentStore", "init_parameters": {"index": index_b}}}
+    bundle_a = _write_bundle(tmp_path, "empty_a", [], "Answer.", config=config_a)
+    bundle_b = _write_bundle(tmp_path, "empty_b", [], "Answer.", config=config_b)
+
+    diff = diff_debug_bundles(bundle_a, bundle_b, ignore_config_paths=set())
+    assert "store" in diff["config_changes"], "With no ignore paths, index UUID diff must be reported."
+    assert diff["config_changes"]["store"]["before"]["index"] == index_a
+    assert diff["config_changes"]["store"]["after"]["index"] == index_b
