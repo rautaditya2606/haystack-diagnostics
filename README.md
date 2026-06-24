@@ -60,7 +60,9 @@ Each bundle captures:
 
 **Bundle filename**: `{query_slug}_{timestamp}.json` — human-readable, sorts naturally across runs of the same query. The `bundle_id` UUID lives inside the JSON.
 
-**`diff_debug_bundles(bundle_a, bundle_b)`**: Compares two persisted bundles and reports score deltas per document, docs that appeared or disappeared, component config changes, and a character-level answer diff (via `difflib`, no tokenizer dependency).
+**`diff_debug_bundles(bundle_a, bundle_b, ignore_config_paths=...)`**: Compares two persisted bundles and reports score deltas per document, docs that appeared or disappeared, component config changes, and a character-level answer diff (via `difflib`, no tokenizer dependency).
+
+Config diffs filter out known **volatile fields** (e.g. `InMemoryDocumentStore.index`, a random UUID generated at instantiation) by default via `DEFAULT_VOLATILE_CONFIG_PATHS`. Pass `ignore_config_paths=set()` to disable filtering, or extend the default set with component-specific paths like `"retriever.session_id"`.
 
 **CLI**: `python -m diagnostics.debug_bundler diff <bundle_a.json> <bundle_b.json>`
 
@@ -252,6 +254,11 @@ Tested against a live RAG Studio (Vectornest AI) instance backed by Weaviate 1.2
    pip install -r requirements.txt
    ```
 
+   > **Contributors**: install from `requirements.txt` **before** `pip install -e .[dev]`.
+   > `pyproject.toml` declares a `haystack-ai>=2.29.0` lower bound so pip may otherwise
+   > resolve a newer release than the tested version.  The `requirements.txt` is the
+   > canonical lockfile; keep it in sync when bumping dependencies.
+
 ---
 
 ## Usage Examples
@@ -271,6 +278,7 @@ from diagnostics import (
     diagnose_retrieval_failure,
     collect_debug_bundle,
     diff_debug_bundles,
+    DEFAULT_VOLATILE_CONFIG_PATHS,  # frozenset of known volatile config fields
 )
 
 # 1. Validate Document Store Ingestion Health
@@ -331,6 +339,12 @@ print("Raw top-k:", bundle["retrieval"]["raw_top_k"])
 diff = diff_debug_bundles(
     "./debug_bundles/what_is_the_capital_20260601T120000Z.json",
     "./debug_bundles/what_is_the_capital_20260602T090000Z.json",
+    # ignore_config_paths defaults to DEFAULT_VOLATILE_CONFIG_PATHS (suppresses UUIDs like
+    # InMemoryDocumentStore.index that change every run but carry no semantic meaning).
+    # To suppress additional volatile fields per-component:
+    # ignore_config_paths=DEFAULT_VOLATILE_CONFIG_PATHS | {"retriever.session_id"}
+    # To disable all filtering and see every diff:
+    # ignore_config_paths=set()
 )
 print("Failure type changed:", diff["failure_type_change"]["changed"])
 print("Score deltas:", diff["score_deltas"])
@@ -481,12 +495,12 @@ haystack-diagnostics/
 
 The project includes a complete suite of unit tests verifying validator edge cases, Mermaid graph exports, sequential RAG query classification, debug bundle schema and diff behaviour, and MCP tool end-to-end smoke tests. All tests run fully offline and require zero external API keys.
 
-**45 tests across 5 test files:**
+**48 tests across 5 test files:**
 - `tests/test_document_validator.py`: Verifies the 7 document store validation checks using mock documents.
 - `tests/test_pipeline_inspector.py`: Validates component detail extraction, socket parsing, and Mermaid graph output.
 - `tests/test_failure_diagnoser.py`: Verifies the failure classification engine (`NO_RESULTS`, `RANKING_FAILURE`, `SCORE_BELOW_CUTOFF`, `CONTEXT_LOSS`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`), including backwards compatibility and the reranker-detected-but-not-captured warning.
-- `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle, and `diff_debug_bundles()` score/appearance/config/answer detection.
-- `tests/smoke_mcp.py`: End-to-end MCP smoke test covering `collect_debug_bundle_tool` with inline content, file path, `content > path` precedence, and neither-provided error handling.
+- `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle, `diff_debug_bundles()` score/appearance/config/answer detection, and `ignore_config_paths` wildcard/component-specific/opt-out behaviour.
+- `tests/smoke_mcp.py`: End-to-end MCP smoke test covering `collect_debug_bundle_tool` with inline content, file path, `content > path` precedence, and neither-provided error handling. Uses `tempfile.gettempdir()` for a portable output path (Windows-safe).
 
 To run the full test suite:
 ```bash
@@ -500,6 +514,11 @@ pytest tests/
 We resolved two critical production issues to ensure robust compatibility with live environments:
 - **UUID/Datetime Metadata Serialization**: Fixed a `TypeError` when serializing retrieved document metadata containing non-JSON-primitive types (e.g., Weaviate `UUID` metadata values) by introducing a recursive metadata cleaner.
 - **PosixPath Stream Loading in MCP Server**: Fixed a `'PosixPath' object has no attribute 'read'` crash inside the MCP pipeline loader. The engine now correctly opens file-like streams when executing `Pipeline.load()` from YAML/JSON configs.
+
+### Community-Reported Fixes (v0.1.1)
+- **Portable smoke test temp dir** *(reported by [@GioiaZheng](https://github.com/GioiaZheng))*: `tests/smoke_mcp.py` previously hardcoded `output_dir="/tmp/mcp_smoke_bundles"`, which resolves to `\tmp` on Windows and fails with `[WinError 5] Access is denied`. Fixed to use `Path(tempfile.gettempdir()) / "mcp_smoke_bundles"`.
+- **Noisy config diffs from volatile `InMemoryDocumentStore.index`** *(reported by [@GioiaZheng](https://github.com/GioiaZheng))*: `diff_debug_bundles()` previously reported `config_changes` for every `InMemoryDocumentStore` comparison because `index` is a random UUID generated at instantiation. Added `ignore_config_paths` parameter (default: `DEFAULT_VOLATILE_CONFIG_PATHS = frozenset({"*.index"})`) to suppress known volatile fields. Pass `ignore_config_paths=set()` to opt out of filtering entirely.
+- **`pyproject.toml` version lower bound**: Tightened `haystack-ai>=2.0.0` to `haystack-ai>=2.29.0` to reflect the minimum tested version and prevent pip from silently resolving a newer, untested release when installing without `requirements.txt`.
 
 ---
 
