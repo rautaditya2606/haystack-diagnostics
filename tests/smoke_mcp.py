@@ -73,7 +73,7 @@ def check(label: str, condition: bool, detail: str = ""):
 # ---------------------------------------------------------------------------
 # Check 1: pipeline_config_content (inline YAML)
 # ---------------------------------------------------------------------------
-print("\n[1] collect_debug_bundle_tool — pipeline_config_content (inline YAML)")
+print("\n[1] collect_debug_bundle_tool - pipeline_config_content (inline YAML)")
 result_str = collect_debug_bundle_tool(
     query=QUERY,
     pipeline_config_content=PIPELINE_YAML,
@@ -103,7 +103,7 @@ except json.JSONDecodeError:
 # ---------------------------------------------------------------------------
 # Check 2: pipeline_config_path (file path)
 # ---------------------------------------------------------------------------
-print("\n[2] collect_debug_bundle_tool — pipeline_config_path (file path)")
+print("\n[2] collect_debug_bundle_tool - pipeline_config_path (file path)")
 with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
     f.write(PIPELINE_YAML)
     yaml_path = f.name
@@ -135,7 +135,7 @@ print("\n[3] Precedence: pipeline_config_content wins over pipeline_config_path"
 result_str3 = collect_debug_bundle_tool(
     query=QUERY,
     pipeline_config_content=PIPELINE_YAML,   # valid content
-    pipeline_config_path="/nonexistent/path/pipeline.yaml",  # bad path — should be ignored
+    pipeline_config_path="/nonexistent/path/pipeline.yaml",  # bad path - should be ignored
     retriever_component_name="retriever",
     output_dir=SMOKE_OUTPUT_DIR,
 )

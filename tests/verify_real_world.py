@@ -87,26 +87,26 @@ def test_layer_1_fidelity(manager):
     # 1. bundle_id exists and is UUID-like
     assert "bundle_id" in bundle
     uuid_val = uuid.UUID(bundle["bundle_id"]) # Will raise ValueError if not UUID
-    print("✓ bundle_id is valid UUID:", bundle["bundle_id"])
+    print("[PASS] bundle_id is valid UUID:", bundle["bundle_id"])
 
     # 2. Filename uses slug pattern, not UUID
     path_str = bundle["_bundle_path"]
     filename = Path(path_str).name
     assert filename.startswith("a_raut_hardware_benchmarking_")
     assert bundle["bundle_id"] not in filename
-    print("✓ filename matches slug pattern:", filename)
+    print("[PASS] filename matches slug pattern:", filename)
 
     # 3. Pipeline graph, connections, components
     assert "pipeline" in bundle
     assert "text_embedder" in bundle["pipeline"]["components"]
     assert "retriever" in bundle["pipeline"]["components"]
     assert len(bundle["pipeline"]["connections"]) > 0
-    print("✓ pipeline structural metadata captured successfully")
+    print("[PASS] pipeline structural metadata captured successfully")
 
     # 4. Component params match
     retriever_info = bundle["pipeline"]["components"]["retriever"]
     assert "WeaviateEmbeddingRetriever" in retriever_info["type"]
-    print("✓ component init_parameters captured successfully")
+    print("[PASS] component init_parameters captured successfully")
 
     # 5. Retrieved docs are populated
     assert "retrieval" in bundle
@@ -115,12 +115,12 @@ def test_layer_1_fidelity(manager):
     first_doc = bundle["retrieval"]["raw_top_k"][0]
     assert "id" in first_doc
     assert "score" in first_doc
-    print(f"✓ retrieved {bundle['retrieval']['doc_count']} docs. Top doc ID={first_doc['id']}, score={first_doc['score']}")
+    print(f"[PASS] retrieved {bundle['retrieval']['doc_count']} docs. Top doc ID={first_doc['id']}, score={first_doc['score']}")
 
     # 6. Prompt snapshot and Answer
     assert bundle["generation"]["prompt_snapshot"] is not None
     assert bundle["generation"]["answer"] is not None
-    print("✓ prompt snapshot and answer populated")
+    print("[PASS] prompt snapshot and answer populated")
 
     # 7. Serialization Drift Check: bundle_returned == bundle_from_disk
     with open(path_str, "r", encoding="utf-8") as f:
@@ -128,7 +128,7 @@ def test_layer_1_fidelity(manager):
     
     # Compare
     assert bundle_from_disk == bundle
-    print("✓ Serialization Drift Check PASSED (Returned dict matches disk JSON 100%)")
+    print("[PASS] Serialization Drift Check PASSED (Returned dict matches disk JSON 100%)")
     return pipe
 
 
@@ -143,7 +143,7 @@ def test_layer_2_taxonomy(live_pipe):
         pipeline_outputs={"retriever": {"documents": []}}
     )
     assert diag_no_res["failure_type"] == "NO_RESULTS"
-    print("✓ NO_RESULTS correctly classified.")
+    print("[PASS] NO_RESULTS correctly classified.")
 
     # Weaviate document ID for benchmarking document:
     known_doc_id = "3e4072848804e137bb54989e06afb2d0b78637df50bccddd5bcaefb5356ab530"
@@ -159,7 +159,7 @@ def test_layer_2_taxonomy(live_pipe):
     )
     assert diag_cutoff["failure_type"] == "SCORE_BELOW_CUTOFF"
     assert diag_cutoff["diagnostics"]["ranking"]["failure_subtype"] == "SCORE_BELOW_CUTOFF"
-    print("✓ SCORE_BELOW_CUTOFF correctly classified when expected doc is not retrieved.")
+    print("[PASS] SCORE_BELOW_CUTOFF correctly classified when expected doc is not retrieved.")
 
     # 3. CONTEXT_LOSS
     print("Testing CONTEXT_LOSS scenario...")
@@ -188,7 +188,7 @@ def test_layer_2_taxonomy(live_pipe):
     assert diag_loss["failure_type"] == "CONTEXT_LOSS"
     assert diag_loss["diagnostics"]["ranking"]["failure_subtype"] == "CONTEXT_LOSS"
     assert diag_loss["failure_type"] != "SCORE_BELOW_CUTOFF"
-    print("✓ CONTEXT_LOSS correctly classified and is mutually exclusive with SCORE_BELOW_CUTOFF.")
+    print("[PASS] CONTEXT_LOSS correctly classified and is mutually exclusive with SCORE_BELOW_CUTOFF.")
 
 
 def test_layer_3_runtime_guardrails():
@@ -218,7 +218,7 @@ def test_layer_3_runtime_guardrails():
     assert reranker_section.get("note") is not None
     expected_warn = "was detected in the pipeline but its intermediate output was not captured"
     assert expected_warn in reranker_section["note"]
-    print("✓ Runtime guardrail successfully detected uncaptured ranker output:")
+    print("[PASS] Runtime guardrail successfully detected uncaptured ranker output:")
     print("  Warning note:", reranker_section["note"])
 
 
@@ -287,23 +287,23 @@ def test_layer_4_diff_engine():
     # Assert appeared/disappeared docs
     assert any(d["id"] == "doc_3" for d in diff["docs_appeared"])
     assert any(d["id"] == "doc_2" for d in diff["docs_disappeared"])
-    print("✓ docs_appeared / docs_disappeared correctly populated.")
+    print("[PASS] docs_appeared / docs_disappeared correctly populated.")
 
     # Assert score deltas
     assert "doc_1" in diff["score_deltas"]
     assert abs(diff["score_deltas"]["doc_1"]["delta"] - (-0.05)) < 1e-5
-    print("✓ score_deltas correctly populated.")
+    print("[PASS] score_deltas correctly populated.")
 
     # Assert config changes
     assert "retriever" in diff["config_changes"]
     assert diff["config_changes"]["retriever"]["before"] == {"top_k": 2}
     assert diff["config_changes"]["retriever"]["after"] == {"top_k": 5}
-    print("✓ config_changes correctly populated.")
+    print("[PASS] config_changes correctly populated.")
 
     # Assert answer diff
     assert "Paris" in diff["answer_diff"]
     assert "beautiful" in diff["answer_diff"]
-    print("✓ answer_diff populated with unified diff.")
+    print("[PASS] answer_diff populated with unified diff.")
 
     # Run CLI comparison
     print("Testing CLI diff execution...")
@@ -316,7 +316,7 @@ def test_layer_4_diff_engine():
     cli_diff = json.loads(res.stdout)
     assert cli_diff["score_deltas"] == diff["score_deltas"]
     assert cli_diff["config_changes"] == diff["config_changes"]
-    print("✓ CLI output matches Python API output perfectly.")
+    print("[PASS] CLI output matches Python API output perfectly.")
 
 
 def test_layer_5_large_corpus():
@@ -352,7 +352,7 @@ def test_layer_5_large_corpus():
         # Assert scoped check only checks the 3 retrieved docs, not the full size
         assert bundle["corpus_checks"]["docs_found"] == 3
         assert len(bundle["corpus_checks"]["scoped_to_doc_ids"]) == 3
-        print(f"✓ Scale {size:6,} documents | latency: {latency:.4f}s | scoped_to_doc_ids size: {len(bundle['corpus_checks']['scoped_to_doc_ids'])}")
+        print(f"[PASS] Scale {size:6,} documents | latency: {latency:.4f}s | scoped_to_doc_ids size: {len(bundle['corpus_checks']['scoped_to_doc_ids'])}")
         
         # Verify latency is sub-second (usually < 50ms)
         assert latency < 1.0, f"Latency {latency:.4f}s exceeded sub-second threshold!"
@@ -370,7 +370,7 @@ def test_layer_6_additional_cases(manager):
     bundle_2 = collect_debug_bundle("france capital", pipe, output_dir="./test_debug_bundles")
 
     assert bundle_1["_bundle_path"] != bundle_2["_bundle_path"]
-    print("✓ Filenames are unique even when run in the same second:")
+    print("[PASS] Filenames are unique even when run in the same second:")
     print("  Bundle 1:", Path(bundle_1["_bundle_path"]).name)
     print("  Bundle 2:", Path(bundle_2["_bundle_path"]).name)
 
@@ -409,7 +409,7 @@ def test_layer_6_additional_cases(manager):
     assert isinstance(meta["numpy_arr"], list) # Numpy array -> List
     assert isinstance(meta["decimal_val"], float) # Decimal -> Float
     assert isinstance(meta["custom_obj"], str) # Custom object -> string description
-    print("✓ Non-JSON-serializable metadata cleaned and serialized successfully.")
+    print("[PASS] Non-JSON-serializable metadata cleaned and serialized successfully.")
 
     # 3. Multiple Rankers
     print("Testing deterministic multiple rankers component selection...")
@@ -422,7 +422,7 @@ def test_layer_6_additional_cases(manager):
     from diagnostics.failure_diagnoser import _discover_reranker_name
     discovered = _discover_reranker_name(pipe_mult)
     assert discovered == "ranker_a"
-    print("✓ Deterministic alphabetical ranker discovery returned:", discovered)
+    print("[PASS] Deterministic alphabetical ranker discovery returned:", discovered)
 
     # 4. Missing/Malformed Document IDs
     print("Testing missing/malformed Document IDs...")
@@ -448,7 +448,7 @@ def test_layer_6_additional_cases(manager):
     
     doc_snapshot = bundle_bad["retrieval"]["raw_top_k"][0]
     assert doc_snapshot["id"] == "autogen_id_0"
-    print("✓ Malformed/null document ID gracefully handled and autogenerated:", doc_snapshot["id"])
+    print("[PASS] Malformed/null document ID gracefully handled and autogenerated:", doc_snapshot["id"])
 
 
 def main():
