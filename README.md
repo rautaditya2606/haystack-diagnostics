@@ -482,7 +482,11 @@ haystack-diagnostics/
 │   ├── test_pipeline_inspector.py
 │   ├── test_failure_diagnoser.py
 │   ├── test_debug_bundler.py     # Bundle schema, filename, corpus check, diff, CONTEXT_LOSS
-│   └── smoke_mcp.py              # MCP end-to-end smoke test (content/path/precedence/error)
+│   ├── test_mcp.py               # MCP tool registration and handler tests
+│   ├── test_scalability.py       # Performance scalability validation
+│   ├── smoke_mcp.py              # Standalone MCP end-to-end smoke test (ASCII status markers)
+│   ├── verify_real_world.py      # E2E Weaviate integration validation layers script
+│   └── mcp_benchmark.py          # MCP concurrency and latency benchmark script
 │
 ├── pyproject.toml                # Package metadata and build system setup
 ├── requirements.txt              # Pinned dependencies for environment replication
@@ -495,12 +499,18 @@ haystack-diagnostics/
 
 The project includes a complete suite of unit tests verifying validator edge cases, Mermaid graph exports, sequential RAG query classification, debug bundle schema and diff behaviour, and MCP tool end-to-end smoke tests. All tests run fully offline and require zero external API keys.
 
-**48 tests across 5 test files:**
+**48 tests across 6 test files:**
 - `tests/test_document_validator.py`: Verifies the 7 document store validation checks using mock documents.
 - `tests/test_pipeline_inspector.py`: Validates component detail extraction, socket parsing, and Mermaid graph output.
 - `tests/test_failure_diagnoser.py`: Verifies the failure classification engine (`NO_RESULTS`, `RANKING_FAILURE`, `SCORE_BELOW_CUTOFF`, `CONTEXT_LOSS`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`), including backwards compatibility and the reranker-detected-but-not-captured warning.
 - `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle, `diff_debug_bundles()` score/appearance/config/answer detection, and `ignore_config_paths` wildcard/component-specific/opt-out behaviour.
-- `tests/smoke_mcp.py`: End-to-end MCP smoke test covering `collect_debug_bundle_tool` with inline content, file path, `content > path` precedence, and neither-provided error handling. Uses `tempfile.gettempdir()` for a portable output path (Windows-safe).
+- `tests/test_mcp.py`: Verifies that MCP tools are correctly registered and their arguments/calls are handled properly.
+- `tests/test_scalability.py`: Ensures that performance scale tests execute within constraints.
+
+**Standalone Scripts:**
+- `tests/smoke_mcp.py`: Standalone end-to-end MCP smoke test covering `collect_debug_bundle_tool` with inline content, file path, `content > path` precedence, and neither-provided error handling. Uses `tempfile.gettempdir()` for a portable output path (Windows-safe and ASCII-safe).
+- `tests/verify_real_world.py`: Standalone real-world validation run that integrates with a live Weaviate backend, verifying all layers of bundle fidelity, taxonomy classification, runtime guardrails, diff engine, and scalability (ASCII-safe).
+- `tests/mcp_benchmark.py`: Standalone concurrency benchmark verifying performance and responsiveness of the MCP server.
 
 To run the full test suite:
 ```bash
@@ -516,7 +526,7 @@ We resolved two critical production issues to ensure robust compatibility with l
 - **PosixPath Stream Loading in MCP Server**: Fixed a `'PosixPath' object has no attribute 'read'` crash inside the MCP pipeline loader. The engine now correctly opens file-like streams when executing `Pipeline.load()` from YAML/JSON configs.
 
 ### Community-Reported Fixes (v0.1.1)
-- **Portable smoke test temp dir and ASCII status markers**: `tests/smoke_mcp.py` previously hardcoded `output_dir="/tmp/mcp_smoke_bundles"`, causing access errors on Windows. Fixed to use a platform-portable temp directory. Also replaced Unicode status glyphs (`✓`/`✗`) with ASCII-safe markers (`[PASS]`/`[FAIL]`) to prevent `UnicodeEncodeError` in standard Windows `cp1252` consoles.
+- **Portable smoke test temp dir and ASCII status markers**: `tests/smoke_mcp.py` previously hardcoded `output_dir="/tmp/mcp_smoke_bundles"`, causing access errors on Windows. Fixed to use a platform-portable temp directory. Also replaced Unicode status glyphs (`✓`/`✗`) and em dashes (`—`) with ASCII-safe markers (`[PASS]`/`[FAIL]`, `-`) in `tests/smoke_mcp.py` and `tests/verify_real_world.py` to prevent `UnicodeEncodeError` and rendering issues in Windows `cp1252` consoles.
 - **Noisy config diffs from volatile `InMemoryDocumentStore.index`**: `diff_debug_bundles()` previously reported `config_changes` for every `InMemoryDocumentStore` comparison because `index` is a random UUID generated at instantiation. Added `ignore_config_paths` parameter (default: `DEFAULT_VOLATILE_CONFIG_PATHS = frozenset({"*.index"})`) to suppress known volatile fields. Pass `ignore_config_paths=set()` to opt out of filtering entirely.
 - **`pyproject.toml` version lower bound**: Tightened `haystack-ai>=2.0.0` to `haystack-ai>=2.29.0` to reflect the minimum tested version and prevent pip from silently resolving a newer, untested release when installing without `requirements.txt`.
 
