@@ -516,7 +516,7 @@ We resolved two critical production issues to ensure robust compatibility with l
 - **PosixPath Stream Loading in MCP Server**: Fixed a `'PosixPath' object has no attribute 'read'` crash inside the MCP pipeline loader. The engine now correctly opens file-like streams when executing `Pipeline.load()` from YAML/JSON configs.
 
 ### Community-Reported Fixes (v0.1.1)
-- **Portable smoke test temp dir**: `tests/smoke_mcp.py` previously hardcoded `output_dir="/tmp/mcp_smoke_bundles"`, which resolves to `\tmp` on Windows and fails with `[WinError 5] Access is denied`. Fixed to use `Path(tempfile.gettempdir()) / "mcp_smoke_bundles"`.
+- **Portable smoke test temp dir and ASCII status markers**: `tests/smoke_mcp.py` previously hardcoded `output_dir="/tmp/mcp_smoke_bundles"`, causing access errors on Windows. Fixed to use a platform-portable temp directory. Also replaced Unicode status glyphs (`✓`/`✗`) with ASCII-safe markers (`[PASS]`/`[FAIL]`) to prevent `UnicodeEncodeError` in standard Windows `cp1252` consoles.
 - **Noisy config diffs from volatile `InMemoryDocumentStore.index`**: `diff_debug_bundles()` previously reported `config_changes` for every `InMemoryDocumentStore` comparison because `index` is a random UUID generated at instantiation. Added `ignore_config_paths` parameter (default: `DEFAULT_VOLATILE_CONFIG_PATHS = frozenset({"*.index"})`) to suppress known volatile fields. Pass `ignore_config_paths=set()` to opt out of filtering entirely.
 - **`pyproject.toml` version lower bound**: Tightened `haystack-ai>=2.0.0` to `haystack-ai>=2.29.0` to reflect the minimum tested version and prevent pip from silently resolving a newer, untested release when installing without `requirements.txt`.
 
