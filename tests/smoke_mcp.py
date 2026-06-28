@@ -57,8 +57,8 @@ QUERY = "Where is the Eiffel Tower?"
 # Use the platform's temp dir so the smoke test is portable on Windows, macOS, and Linux
 SMOKE_OUTPUT_DIR = str(Path(tempfile.gettempdir()) / "mcp_smoke_bundles")
 
-PASS = "\033[92m✓ PASS\033[0m"
-FAIL = "\033[91m✗ FAIL\033[0m"
+PASS = "\033[92m[PASS]\033[0m"
+FAIL = "\033[91m[FAIL]\033[0m"
 failures = []
 
 
