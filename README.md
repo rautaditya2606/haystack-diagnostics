@@ -21,12 +21,13 @@ While Haystack already offers robust pipeline graphing, OpenTelemetry tracing, a
 Evaluates the health of documents written to a Haystack document store. It checks for:
 - **Tenant-Scoped/Filter Isolation**: Supports a `filters` parameter to isolate document analysis (e.g. scoping health checks by `user_id` or other metadata in multi-tenant environments).
 - `content=None` (blob-only documents causing pipeline crashes)
-- Empty documents (`content=""`)
+- Empty or whitespace-only documents (`content=""` or consisting only of space characters)
 - Very short chunks (character count below threshold)
-- Duplicate chunks (detected using MD5 hash)
+- Duplicate chunks (detected using MD5 content hash) and duplicate document IDs
 - Missing metadata fields needed by pipeline filters
 - Null embeddings
 - Embedding dimension mismatch (both store-wide consistency and against an expected dimension)
+- Optional **RAG Lineage Metadata** validation (checks for presence of `source_id`, `chunk_id`, `content_hash`, `embedding_model`, `index_version`, and `indexed_at` keys, enabled via `check_lineage_metadata=True`)
 
 ### 2. `inspect_pipeline(pipeline)`
 Inspects a live Haystack pipeline and returns its structural metadata:
@@ -38,12 +39,15 @@ Inspects a live Haystack pipeline and returns its structural metadata:
 ### 3. `diagnose_retrieval_failure(pipeline, query, ...)`
 Classifies query-level retrieval and pipeline failures by running the pipeline and extracting intermediate retriever outputs. It classifies failures in the following sequence:
 1. **NO_RESULTS**: The retriever returned 0 documents.
-2. **SCORE_BELOW_CUTOFF** / **RANKING_FAILURE**: The top result's score was below `ranking_threshold`.
-   - With `relevant_doc_id` hint: classified as `SCORE_BELOW_CUTOFF` (expected doc not retrieved) or `CONTEXT_LOSS` (see below).
+2. **FILTER_EXCLUSION** *(requires `relevant_doc_id` + a document store)*: The expected document exists in the document store but was excluded by the query's active metadata filters.
+3. **SCORE_BELOW_CUTOFF** / **RANKING_FAILURE**: The top result's score was below `ranking_threshold`.
+   - With `relevant_doc_id` hint: classified as `SCORE_BELOW_CUTOFF` (expected doc was not retrieved and not excluded by filters) or `CONTEXT_LOSS` (see below).
    - Without hint: classified as `RANKING_FAILURE` (legacy, backwards-compatible).
-3. **CONTEXT_LOSS** *(requires `relevant_doc_id` + a reranker in the pipeline)*: The expected document was present in the retriever's raw output but was dropped by the reranker. Covers reranker demotion; prompt-builder truncation detection is a planned future extension.
-4. **EMPTY_CONTEXT**: Documents were retrieved, but their combined content is empty or contains no usable text.
-5. **GENERATOR_FAILURE**: Relevant context was supplied, but the generator returned an empty response, an LLM refusal (e.g., "I don't know"), or did not match the `expected_answer` (if provided).
+4. **CONTEXT_LOSS** *(requires `relevant_doc_id` + a reranker in the pipeline)*: The expected document was present in the retriever's raw output but was dropped by the reranker. Covers reranker demotion; prompt-builder truncation detection is a planned future extension.
+5. **EMPTY_CONTEXT**: Documents were retrieved, but their combined content is empty or contains no usable text.
+6. **GENERATOR_FAILURE**: Relevant context was supplied, but the generator returned an empty response, an LLM refusal (e.g., "I don't know"), or did not match the `expected_answer` (if provided).
+
+> **Automated Discovery**: If `document_store` is not explicitly passed to `diagnose_retrieval_failure` or `collect_debug_bundle`, the toolchain automatically attempts to discover it from the pipeline's retriever component. This works reliably across all standard database integrations (like Weaviate, Qdrant, Elasticsearch, and InMemory stores) by checking retriever attributes.
 
 > **Runtime safety**: If a reranker is detected in the pipeline but its intermediate output is missing from pre-computed `pipeline_outputs`, an explicit warning note is included in the return dict. There is no silent fallback to `RANKING_FAILURE`.
 
@@ -290,7 +294,8 @@ report = validate_document_store(
     expected_metadata_keys=["source", "language"],
     expected_embedding_dim=1536,
     short_chunk_threshold=50,
-    filters={"user_id": "tenant-123"}  # Optional scoping for tenant isolation
+    filters={"user_id": "tenant-123"},  # Optional scoping for tenant isolation
+    check_lineage_metadata=True,        # Optional checking for RAG lineage tags
 )
 print("Store Health Report:", report["summary"])
 
@@ -320,7 +325,8 @@ diagnostics = diagnose_retrieval_failure(
     ranking_threshold=0.6
 )
 print("Failure Subtype:", diagnostics["diagnostics"]["ranking"]["failure_subtype"])
-# -> SCORE_BELOW_CUTOFF if doc not retrieved
+# -> SCORE_BELOW_CUTOFF if doc not retrieved and not excluded by filters
+# -> FILTER_EXCLUSION if expected doc is in store but excluded by filters
 # -> CONTEXT_LOSS if doc retrieved but reranker dropped it
 
 # 4. Collect a Debug Bundle for a single query
@@ -499,11 +505,11 @@ haystack-diagnostics/
 
 The project includes a complete suite of unit tests verifying validator edge cases, Mermaid graph exports, sequential RAG query classification, debug bundle schema and diff behaviour, and MCP tool end-to-end smoke tests. All tests run fully offline and require zero external API keys.
 
-**48 tests across 6 test files:**
-- `tests/test_document_validator.py`: Verifies the 7 document store validation checks using mock documents.
+**54 tests across 6 test files:**
+- `tests/test_document_validator.py`: Verifies the document store validation checks (including whitespace, duplicate document IDs, and RAG lineage metadata) using mock documents.
 - `tests/test_pipeline_inspector.py`: Validates component detail extraction, socket parsing, and Mermaid graph output.
-- `tests/test_failure_diagnoser.py`: Verifies the failure classification engine (`NO_RESULTS`, `RANKING_FAILURE`, `SCORE_BELOW_CUTOFF`, `CONTEXT_LOSS`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`), including backwards compatibility and the reranker-detected-but-not-captured warning.
-- `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle, `diff_debug_bundles()` score/appearance/config/answer detection, and `ignore_config_paths` wildcard/component-specific/opt-out behaviour.
+- `tests/test_failure_diagnoser.py`: Verifies the failure classification engine (`NO_RESULTS`, `FILTER_EXCLUSION`, `SCORE_BELOW_CUTOFF`, `CONTEXT_LOSS`, `EMPTY_CONTEXT`, `GENERATOR_FAILURE`), including backwards compatibility, auto-discovery of document stores, and the reranker-detected-but-not-captured warning.
+- `tests/test_debug_bundler.py`: Verifies bundle schema, `{query_slug}_{timestamp}` filename format (not UUID), scoped corpus checks, failure classification via bundle (including explicit document store pass-in), `diff_debug_bundles()` score/appearance/config/answer detection, and `ignore_config_paths` wildcard/component-specific/opt-out behaviour.
 - `tests/test_mcp.py`: Verifies that MCP tools are correctly registered and their arguments/calls are handled properly.
 - `tests/test_scalability.py`: Ensures that performance scale tests execute within constraints.
 
