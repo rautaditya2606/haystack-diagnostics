@@ -9,6 +9,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from haystack import Document, Pipeline
@@ -27,7 +28,7 @@ class MockRetriever:
         self.docs = docs if docs is not None else []
 
     @component.output_types(documents=list)
-    def run(self, query: str):
+    def run(self, query: str, filters: Optional[dict] = None):
         return {"documents": self.docs}
 
 
@@ -418,3 +419,41 @@ def test_diff_ignore_config_paths_empty_set_shows_all(tmp_path):
     assert "store" in diff["config_changes"], "With no ignore paths, index UUID diff must be reported."
     assert diff["config_changes"]["store"]["before"]["index"] == index_a
     assert diff["config_changes"]["store"]["after"]["index"] == index_b
+
+
+def test_bundle_explicit_document_store(tmp_path):
+    """Passing a document store explicitly to collect_debug_bundle passes it to failure classification."""
+    from unittest.mock import MagicMock
+
+    # Mock store to simulate filter exclusion when queried with filters
+    mock_store = MagicMock()
+    
+    def mock_filter_docs(filters=None):
+        if not filters:
+            return []
+        # If querying for existence by ID
+        if filters == {"id": "doc-expected"} or filters == {"field": "id", "operator": "==", "value": "doc-expected"}:
+            return [Document(id="doc-expected", content="Correct answer content")]
+        # If combined/query-time filters, simulate exclusion
+        return []
+    mock_store.filter_documents.side_effect = mock_filter_docs
+
+    # Setup simple pipeline
+    pipe = _simple_pipeline(docs=[Document(content="Wrong context", score=0.9, id="doc-wrong")])
+
+    bundle = collect_debug_bundle(
+        query="test query",
+        pipeline=pipe,
+        document_store=mock_store,
+        pipeline_inputs={
+            "retriever": {"query": "test query", "filters": {"category": "tech"}},
+            "generator": {"prompt": []}
+        },
+        relevant_doc_id="doc-expected",
+        output_dir=str(tmp_path)
+    )
+
+    assert bundle["failure_type"] == "FILTER_EXCLUSION"
+    assert bundle["diagnostics"]["ranking"]["document_in_store"] is True
+    assert bundle["diagnostics"]["ranking"]["failure_subtype"] == "FILTER_EXCLUSION"
+

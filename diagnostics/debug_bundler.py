@@ -323,6 +323,8 @@ def collect_debug_bundle(
         ranking_threshold=ranking_threshold,
         relevant_doc_id=relevant_doc_id,
         pipeline_outputs=results,
+        document_store=document_store,
+        pipeline_inputs=pipeline_inputs,
     )
 
     # --- Inspect pipeline structure ---

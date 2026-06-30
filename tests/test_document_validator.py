@@ -150,3 +150,68 @@ def test_validate_document_store_with_filters():
     assert report["summary"]["total_documents"] == 1
     assert report["summary"]["invalid_documents"] == 0
 
+
+def test_validate_document_store_whitespace_only():
+    store = InMemoryDocumentStore()
+    docs = [
+        Document(content="   ", meta={"category": "a"}),
+        Document(content="\n\t", meta={"category": "b"}),
+        Document(content="Valid text document that is long enough.", meta={"category": "c"}),
+    ]
+    store.write_documents(docs)
+    report = validate_document_store(store, short_chunk_threshold=20)
+    assert report["checks"]["empty_content"]["count"] == 2
+    assert report["summary"]["total_documents"] == 3
+
+
+def test_validate_document_store_duplicate_ids():
+    class MockStore:
+        def filter_documents(self, filters=None):
+            return [
+                Document(id="doc-1", content="First document contents here."),
+                Document(id="doc-1", content="Second document with duplicate id."),
+            ]
+    store = MockStore()
+    report = validate_document_store(store, check_lineage_metadata=False)
+    assert report["checks"]["duplicate_ids"]["status"] == "fail"
+    assert report["checks"]["duplicate_ids"]["count"] == 1
+    assert "doc-1" in report["checks"]["duplicate_ids"]["document_ids"]
+
+
+def test_validate_document_store_missing_lineage_metadata():
+    store = InMemoryDocumentStore()
+    docs = [
+        Document(
+            content="Document with complete lineage metadata.",
+            meta={
+                "source_id": "src-1",
+                "chunk_id": "chk-1",
+                "content_hash": "hash-1",
+                "embedding_model": "model-1",
+                "index_version": "v1",
+                "indexed_at": "2026-06-30",
+            }
+        ),
+        Document(
+            content="Document missing source_id and chunk_id lineage fields.",
+            meta={
+                "content_hash": "hash-2",
+                "embedding_model": "model-2",
+                "index_version": "v1",
+                "indexed_at": "2026-06-30",
+            }
+        )
+    ]
+    store.write_documents(docs)
+    
+    # Check when enabled explicitly
+    report = validate_document_store(store, check_lineage_metadata=True)
+    assert report["checks"]["missing_lineage_metadata"]["status"] == "warning"
+    assert report["checks"]["missing_lineage_metadata"]["count"] == 1
+    assert report["checks"]["missing_lineage_metadata"]["details"][0]["missing_keys"] == ["source_id", "chunk_id"]
+
+    # Check default (disabled)
+    report_disabled = validate_document_store(store)
+    assert report_disabled["checks"]["missing_lineage_metadata"]["status"] == "skipped"
+
+

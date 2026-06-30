@@ -120,15 +120,17 @@ def diagnose_retrieval_failure(
     ranking_threshold: float = 0.5,
     pipeline_outputs: Optional[Dict[str, Any]] = None,
     relevant_doc_id: Optional[str] = None,
+    document_store: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Runs the pipeline (or uses pre-computed outputs), extracts intermediate retriever output,
     and classifies RAG failure in the following sequence:
 
     1. NO_RESULTS: Retriever returned 0 documents.
-    2. SCORE_BELOW_CUTOFF / RANKING_FAILURE / CONTEXT_LOSS: Score or ranking problem.
+    2. SCORE_BELOW_CUTOFF / FILTER_EXCLUSION / RANKING_FAILURE / CONTEXT_LOSS: Score, filter or ranking problem.
        - With relevant_doc_id hint:
-         - Expected doc not in retrieved docs → SCORE_BELOW_CUTOFF
+         - Expected doc not in retrieved docs but filtered out by metadata filters → FILTER_EXCLUSION
+         - Expected doc not in retrieved docs due to low score or missing doc → SCORE_BELOW_CUTOFF
          - Expected doc in retrieved docs but dropped by reranker → CONTEXT_LOSS
          - Score below threshold (no doc-level issue identified) → SCORE_BELOW_CUTOFF
        - Without relevant_doc_id hint: score < threshold → RANKING_FAILURE (legacy, backwards-compat)
@@ -153,7 +155,8 @@ def diagnose_retrieval_failure(
     :param ranking_threshold: Threshold below which top document score flags ranking degradation.
     :param pipeline_outputs: Optional dict of pre-computed outputs from a single pipeline execution.
     :param relevant_doc_id: Optional document ID expected to be retrieved. Enables SCORE_BELOW_CUTOFF
-        vs CONTEXT_LOSS distinction. When absent, RANKING_FAILURE is used as the legacy bucket.
+        vs CONTEXT_LOSS vs FILTER_EXCLUSION distinction. When absent, RANKING_FAILURE is used as the legacy bucket.
+    :param document_store: Optional document store instance for checking metadata filter exclusions.
     :return: A structured diagnostic dictionary report.
     """
     # 1. Component discovery
@@ -170,6 +173,17 @@ def diagnose_retrieval_failure(
 
     if not reranker_component_name:
         reranker_component_name = _discover_reranker_name(pipeline)
+
+    # Auto-discover document store from retriever if not provided
+    if not document_store:
+        try:
+            retriever_component = pipeline.get_component(retriever_component_name)
+            if hasattr(retriever_component, "document_store"):
+                document_store = retriever_component.document_store
+            elif hasattr(retriever_component, "generator") and hasattr(retriever_component.generator, "document_store"):
+                document_store = retriever_component.generator.document_store
+        except Exception:
+            pass
 
     # 2. Run pipeline or use pre-computed outputs
     if pipeline_outputs is not None:
@@ -257,14 +271,15 @@ def diagnose_retrieval_failure(
     # Check 2: Ranking / Score / Context failure
     #
     # With relevant_doc_id:
-    #   - Expected doc absent from retriever output → SCORE_BELOW_CUTOFF
+    #   - Expected doc absent from retriever output → SCORE_BELOW_CUTOFF or FILTER_EXCLUSION
     #   - Expected doc in retriever but absent from reranker output → CONTEXT_LOSS
     #   - Score below threshold (no doc-level issue) → SCORE_BELOW_CUTOFF
     #
     # Without relevant_doc_id (legacy):
     #   - Score below threshold → RANKING_FAILURE (backwards-compat)
     top_score = None
-    ranking_failure_subtype = None  # "RANKING_FAILURE" | "SCORE_BELOW_CUTOFF" | "CONTEXT_LOSS"
+    ranking_failure_subtype = None  # "RANKING_FAILURE" | "SCORE_BELOW_CUTOFF" | "CONTEXT_LOSS" | "FILTER_EXCLUSION"
+    document_in_store = None
 
     if not triggered_checks["no_results"] and retrieved_docs:
         docs_with_scores = [doc for doc in retrieved_docs if doc.score is not None]
@@ -279,6 +294,71 @@ def diagnose_retrieval_failure(
                 # Expected doc was never retrieved
                 triggered_checks["ranking_failure"] = True
                 ranking_failure_subtype = "SCORE_BELOW_CUTOFF"
+
+                # Check if it was filtered out by query filters
+                if document_store is not None:
+                    exists_docs = []
+                    try:
+                        exists_docs = document_store.filter_documents(
+                            filters={"field": "id", "operator": "==", "value": relevant_doc_id}
+                        )
+                    except Exception:
+                        try:
+                            exists_docs = document_store.filter_documents(filters={"id": relevant_doc_id})
+                        except Exception:
+                            pass
+                    
+                    if exists_docs:
+                        document_in_store = True
+                        
+                        # Extract query filters
+                        query_filters = None
+                        if pipeline_inputs:
+                            if retriever_component_name in pipeline_inputs and isinstance(pipeline_inputs[retriever_component_name], dict):
+                                query_filters = pipeline_inputs[retriever_component_name].get("filters")
+                            if query_filters is None:
+                                query_filters = pipeline_inputs.get("filters")
+                            if query_filters is None:
+                                for comp_name, comp_in in pipeline_inputs.items():
+                                    if isinstance(comp_in, dict) and "filters" in comp_in:
+                                        query_filters = comp_in["filters"]
+                                        break
+
+                        if query_filters:
+                            is_modern = isinstance(query_filters, dict) and (
+                                "operator" in query_filters 
+                                or "conditions" in query_filters 
+                                or ("field" in query_filters and "operator" in query_filters)
+                            )
+                            if is_modern:
+                                combined_filters = {
+                                    "operator": "AND",
+                                    "conditions": [
+                                        {"field": "id", "operator": "==", "value": relevant_doc_id},
+                                        query_filters
+                                    ]
+                                }
+                            elif isinstance(query_filters, dict):
+                                combined_filters = {**query_filters, "id": relevant_doc_id}
+                            else:
+                                combined_filters = query_filters
+
+                            filtered_docs = None
+                            try:
+                                filtered_docs = document_store.filter_documents(filters=combined_filters)
+                            except Exception:
+                                if isinstance(query_filters, dict):
+                                    try:
+                                        fallback_filters = {**query_filters, "id": relevant_doc_id}
+                                        filtered_docs = document_store.filter_documents(filters=fallback_filters)
+                                    except Exception:
+                                        pass
+                            
+                            # If the query completed but returned nothing, it is excluded by the query filters
+                            if filtered_docs is not None and not filtered_docs:
+                                ranking_failure_subtype = "FILTER_EXCLUSION"
+                    else:
+                        document_in_store = False
             elif reranker_component_name and reranked_docs is not None:
                 # Expected doc was retrieved — check if reranker dropped it
                 reranked_ids = {doc.id for doc in reranked_docs if doc.id is not None}
@@ -353,7 +433,7 @@ def diagnose_retrieval_failure(
     if triggered_checks["no_results"]:
         primary_failure = "NO_RESULTS"
     elif triggered_checks["ranking_failure"]:
-        primary_failure = ranking_failure_subtype  # RANKING_FAILURE | SCORE_BELOW_CUTOFF | CONTEXT_LOSS
+        primary_failure = ranking_failure_subtype  # RANKING_FAILURE | SCORE_BELOW_CUTOFF | CONTEXT_LOSS | FILTER_EXCLUSION
     elif triggered_checks["empty_context"]:
         primary_failure = "EMPTY_CONTEXT"
     elif triggered_checks["generator_failure"]:
@@ -414,6 +494,7 @@ def diagnose_retrieval_failure(
                 "top_score": top_score,
                 "is_below_threshold": triggered_checks["ranking_failure"],
                 "relevant_doc_id": relevant_doc_id,
+                "document_in_store": document_in_store,
                 "failure_subtype": ranking_failure_subtype,
             },
             "triggered_checks": triggered_checks,

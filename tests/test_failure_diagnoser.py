@@ -419,3 +419,78 @@ def test_reranker_detected_but_not_captured_raises():
     assert report["failure_type"] != "RANKING_FAILURE", (
         "Should not silently fall back to RANKING_FAILURE when reranker output is missing."
     )
+
+
+def test_diagnoser_filter_exclusion():
+    from unittest.mock import MagicMock
+    
+    # 1. Setup mock document store
+    mock_store = MagicMock()
+    
+    def mock_filter_docs(filters=None):
+        if not filters:
+            return []
+        # If querying for id only (checking existence)
+        if filters == {"id": "doc-expected"} or filters == {"field": "id", "operator": "==", "value": "doc-expected"}:
+            return [Document(id="doc-expected", content="Correct answer content")]
+        # If querying with combined query-time filters (which excludes it)
+        # return empty list to simulate filter exclusion
+        return []
+    mock_store.filter_documents.side_effect = mock_filter_docs
+
+    # 2. Setup mock pipeline
+    mock_pipeline = MagicMock()
+    mock_pipeline.graph.nodes = MagicMock(return_value=[
+        ("retriever", {"instance": MagicMock()}),
+        ("generator", {"instance": MagicMock()}),
+    ])
+    
+    pre_computed_outputs = {
+        "retriever": {"documents": [Document(content="Wrong context", score=0.9, id="doc-wrong")]},
+        "generator": {"replies": ["Wrong answer"]}
+    }
+    
+    report = diagnose_retrieval_failure(
+        pipeline=mock_pipeline,
+        query="test query",
+        retriever_component_name="retriever",
+        relevant_doc_id="doc-expected",
+        pipeline_outputs=pre_computed_outputs,
+        pipeline_inputs={"retriever": {"filters": {"category": "tech"}}},
+        document_store=mock_store,
+    )
+    
+    assert report["failure_type"] == "FILTER_EXCLUSION"
+    assert report["diagnostics"]["ranking"]["document_in_store"] is True
+    assert report["diagnostics"]["ranking"]["failure_subtype"] == "FILTER_EXCLUSION"
+
+
+def test_diagnoser_score_below_cutoff_missing_from_store():
+    from unittest.mock import MagicMock
+    mock_store = MagicMock()
+    mock_store.filter_documents.return_value = [] # does not exist in store
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.graph.nodes = MagicMock(return_value=[
+        ("retriever", {"instance": MagicMock()}),
+        ("generator", {"instance": MagicMock()}),
+    ])
+    
+    pre_computed_outputs = {
+        "retriever": {"documents": [Document(content="Wrong context", score=0.9, id="doc-wrong")]},
+        "generator": {"replies": ["Wrong answer"]}
+    }
+    
+    report = diagnose_retrieval_failure(
+        pipeline=mock_pipeline,
+        query="test query",
+        retriever_component_name="retriever",
+        relevant_doc_id="doc-expected",
+        pipeline_outputs=pre_computed_outputs,
+        document_store=mock_store,
+    )
+    
+    assert report["failure_type"] == "SCORE_BELOW_CUTOFF"
+    assert report["diagnostics"]["ranking"]["document_in_store"] is False
+    assert report["diagnostics"]["ranking"]["failure_subtype"] == "SCORE_BELOW_CUTOFF"
+

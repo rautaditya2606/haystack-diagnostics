@@ -139,17 +139,20 @@ def validate_document_store(
     batch_size: int = 1000,
     validate_embeddings: bool = True,
     max_docs_for_duplicate_check: Optional[int] = 500_000,
+    check_lineage_metadata: bool = False,
 ) -> Dict[str, Any]:
     """
     Validates the health of the documents within a Haystack Document Store.
-    Performs 7 ingestion-layer checks in a streaming batch-wise manner:
+    Performs ingestion-layer health checks in a streaming batch-wise manner:
     1. content is None
-    2. Empty documents
+    2. Empty/whitespace-only documents
     3. Very short chunks
-    4. Duplicate chunks (MD5 hash)
+    4. Duplicate chunks (MD5 content hash)
     5. Missing metadata fields
     6. Null embeddings
     7. Embedding dimension mismatch
+    8. Duplicate document IDs
+    9. RAG Lineage metadata fields (source_id, chunk_id, content_hash, embedding_model, index_version, indexed_at)
 
     NOTE: Duplicate detection requires maintaining content hash indexes in memory.
     This scales linearly with the number of unique documents (O(N) memory complexity).
@@ -166,6 +169,7 @@ def validate_document_store(
         Once the running document count exceeds this limit, the hash index is cleared and duplicate
         detection is skipped for the remainder of the scan. Set to None to disable the cap (not
         recommended for stores with more than ~1M documents). Defaults to 500,000.
+    :param check_lineage_metadata: If True, checks for recommended RAG lineage metadata fields.
     :return: A dictionary containing the validation summary and detailed results.
     """
     total_docs = 0
@@ -181,8 +185,13 @@ def validate_document_store(
     hash_map = defaultdict(list)
     duplicate_check_skipped = False
     
+    # Trackers for document ID duplicates
+    seen_ids = set()
+    duplicate_ids = []
+
     # Metadata tracker
     missing_metadata_details = []
+    missing_lineage_details = []
     
     # Embedding dimensions tracker
     dim_map = defaultdict(list)
@@ -203,13 +212,20 @@ def validate_document_store(
         for doc in batch:
             doc_id = doc.id
             
+            # Check duplicate document IDs
+            if doc_id in seen_ids:
+                duplicate_ids.append(doc_id)
+                invalid_doc_ids.add(doc_id)
+            else:
+                seen_ids.add(doc_id)
+
             # 1. content is None
             if doc.content is None:
                 content_none_ids.append(doc_id)
                 invalid_doc_ids.add(doc_id)
             else:
-                # 2. Empty documents
-                if doc.content == "":
+                # 2. Empty documents (including whitespace-only content)
+                if doc.content.strip() == "":
                     empty_content_ids.append(doc_id)
                     invalid_doc_ids.add(doc_id)
                 
@@ -234,8 +250,8 @@ def validate_document_store(
                         hash_map[content_hash].append(doc_id)
 
             # 5. Missing metadata fields
+            doc_meta = doc.meta or {}
             if expected_metadata_keys:
-                doc_meta = doc.meta or {}
                 missing_keys = [
                     key for key in expected_metadata_keys 
                     if key not in doc_meta or doc_meta[key] is None
@@ -246,6 +262,19 @@ def validate_document_store(
                         "missing_keys": missing_keys
                     })
                     invalid_doc_ids.add(doc_id)
+
+            # RAG Lineage Metadata validation
+            if check_lineage_metadata:
+                lineage_keys = ["source_id", "chunk_id", "content_hash", "embedding_model", "index_version", "indexed_at"]
+                missing_lineage_keys = [
+                    key for key in lineage_keys
+                    if key not in doc_meta or doc_meta[key] is None
+                ]
+                if missing_lineage_keys:
+                    missing_lineage_details.append({
+                        "document_id": doc_id,
+                        "missing_keys": missing_lineage_keys
+                    })
 
             # 6. Null embeddings (only run if validate_embeddings is True)
             if validate_embeddings:
@@ -300,6 +329,11 @@ def validate_document_store(
     else:
         status_duplicates = "pass" if not duplicates_list else "fail"
     status_missing_metadata = "pass" if not missing_metadata_details else "warning"
+    status_duplicate_ids = "pass" if not duplicate_ids else "fail"
+    status_missing_lineage = (
+        "skipped" if not check_lineage_metadata
+        else ("pass" if not missing_lineage_details else "warning")
+    )
     
     if not validate_embeddings:
         status_null_embeddings = "skipped"
@@ -316,7 +350,10 @@ def validate_document_store(
         + len(missing_metadata_details)
         + len(null_embedding_ids)
         + len(dim_mismatch_details)
+        + len(duplicate_ids)
     )
+    if check_lineage_metadata:
+        total_issues += len(missing_lineage_details)
 
     report = {
         "summary": {
@@ -351,10 +388,20 @@ def validate_document_store(
                     f"{max_docs_for_duplicate_check:,}. Increase or set to None to enable."
                 ) if duplicate_check_skipped else None,
             },
+            "duplicate_ids": {
+                "status": status_duplicate_ids,
+                "count": len(duplicate_ids),
+                "document_ids": duplicate_ids,
+            },
             "missing_metadata": {
                 "status": status_missing_metadata,
                 "count": len(missing_metadata_details),
                 "details": missing_metadata_details,
+            },
+            "missing_lineage_metadata": {
+                "status": status_missing_lineage,
+                "count": len(missing_lineage_details),
+                "details": missing_lineage_details,
             },
             "null_embeddings": {
                 "status": status_null_embeddings,
